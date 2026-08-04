@@ -333,6 +333,125 @@ async function cmdClose(profile) {
   console.log(JSON.stringify({ ok: true, profileId: id, status: result.data?.status }, null, 2));
 }
 
+async function cmdCreate(args) {
+  let count = 1;
+  let platform = "CUSTOM";
+  let prefix = "";
+  const names = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--count") count = Number.parseInt(args[++i], 10) || 1;
+    else if (args[i] === "--platform") platform = args[++i] || "CUSTOM";
+    else if (args[i] === "--prefix") prefix = args[++i] || "";
+    else names.push(args[i]);
+  }
+  const full = await api("/api/v1/profiles");
+  const items = full.data?.items || full.data || [];
+  const tpl = items[0]?.fingerprint;
+  if (!tpl) throw new Error("没有可用指纹模板：请先在应用里创建至少一个环境");
+  const usedNames = new Set(items.map((p) => p.name));
+  let namesList = names.length ? names.slice(0, count) : [];
+  if (namesList.length === 0) {
+    if (prefix) {
+      for (let i = 1; i <= count; i++) namesList.push(prefix + i);
+    } else {
+      let maxNum = 0;
+      for (const p of items) {
+        const n = Number(p.name);
+        if (Number.isFinite(n) && n > maxNum) maxNum = n;
+      }
+      for (let i = 1; i <= count; i++) {
+        let cand = String(maxNum + i);
+        let k = 1;
+        while (usedNames.has(cand)) {
+          cand = String(maxNum + i + k);
+          k += 1;
+        }
+        namesList.push(cand);
+      }
+    }
+  }
+  const results = [];
+  for (const name of namesList) {
+    const r = await api("/api/v1/profiles", {
+      method: "POST",
+      body: { name, platform, fingerprint: JSON.parse(JSON.stringify(tpl)) }
+    });
+    results.push({ name, ok: true, id: r.data?.id });
+  }
+  console.log(JSON.stringify(results, null, 2));
+}
+
+async function cmdDelete(profile) {
+  const id = await resolveProfileId(profile, { allowOffline: true });
+  const r = await api(`/api/v1/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  console.log(JSON.stringify({ ok: true, profileId: id, data: r.data }, null, 2));
+}
+
+async function cmdOpenBatch(csv) {
+  const ids = String(csv || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (ids.length === 0) throw new Error("Usage: open-batch <id1,id2,...> (并发打开，默认 3 个一批)");
+  const results = [];
+  const concurrency = 3;
+  for (let i = 0; i < ids.length; i += concurrency) {
+    const batch = ids.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (p) => {
+        try {
+          const id = await resolveProfileId(p, { allowOffline: true });
+          const r = await api(`/api/v1/profiles/${encodeURIComponent(id)}/open`, { method: "POST", body: {} });
+          results.push({ profile: p, ok: true, status: r.data?.status });
+        } catch (error) {
+          results.push({ profile: p, ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      })
+    );
+  }
+  console.log(JSON.stringify(results, null, 2));
+}
+
+async function cmdAutomaOpen(args) {
+  const workflowId = args[0];
+  let profileId = "";
+  let workflowName = "";
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--profile") profileId = args[++i] || "";
+    else if (args[i] === "--name") workflowName = args[++i] || "";
+  }
+  if (!workflowId) throw new Error("Usage: automa-open <workflowId> [--profile <id>] [--name <name>]");
+  if (profileId) {
+    profileId = await resolveProfileId(profileId, { allowOffline: true });
+  }
+  const r = await api("/api/v1/matrixflow/automa/open", {
+    method: "POST",
+    body: { workflowId, profileId, workflowName }
+  });
+  console.log(JSON.stringify(r.data, null, 2));
+}
+
+async function cmdWorkflowCreate(workflowId, name) {
+  if (!workflowId) throw new Error("Usage: workflow-create <workflowId> [name]");
+  const r = await api("/api/v1/matrixflow/workflows/init", {
+    method: "POST",
+    body: { workflowId, name: name || "新建工作流" }
+  });
+  console.log(JSON.stringify(r.data, null, 2));
+}
+
+async function cmdWorkflowList() {
+  const r = await api("/api/v1/matrixflow/workflows");
+  const list = (r.data || []).map((w) => ({
+    id: w.id,
+    name: w.name,
+    nodes: w.nodes ?? (w.workflowJson?.drawflow?.nodes?.length ?? 0),
+    edges: w.edges ?? (w.workflowJson?.drawflow?.edges?.length ?? 0),
+    updatedAt: w.updatedAt
+  }));
+  console.log(JSON.stringify(list, null, 2));
+}
+
 async function cmdPages(profile) {
   const { profile: profileId } = parseProfileSpec(profile);
   let profileDir = findProfileDir(profileId);
@@ -579,7 +698,13 @@ async function main() {
         "  status                                    show app/token/userData status",
         "  list                                      list running environments (windows)",
         "  open <profileId|name> [url ...]            open an environment (waits until CDP-ready)",
+        "  open-batch <id1,id2,...>                   open many environments concurrently (3 at a time)",
+        "  create <name...> [--count N] [--prefix P]  create new environments (fingerprint cloned from first)",
+        "  delete <profileId|name>                    delete an environment",
         "  close <profileId|name>                     close an environment",
+        "  automa-open <workflowId> [--profile <id>]  open the Automa designer for a workflow",
+        "  workflow-create <workflowId> [name]        create a new Automa workflow",
+        "  workflow-list                              list workflows",
         "  pages <profileId|name>                     list page tabs of a running environment",
         "  navigate <profileId|name> <url>            navigate active page (waits for load)",
         "  title <profileId|name>                     show active page url + title",
@@ -600,7 +725,13 @@ async function main() {
     case "status": return await cmdStatus();
     case "list": return await cmdList();
     case "open": return await cmdOpen(args);
+    case "open-batch": return await cmdOpenBatch(args[0]);
+    case "create": return await cmdCreate(args);
+    case "delete": return await cmdDelete(args[0]);
     case "close": return await cmdClose(args[0]);
+    case "automa-open": return await cmdAutomaOpen(args);
+    case "workflow-create": return await cmdWorkflowCreate(args[0], args[1]);
+    case "workflow-list": return await cmdWorkflowList();
     case "pages": return await cmdPages(args[0]);
     case "navigate": return await cmdNavigate(args[0], args[1]);
     case "title": return await cmdTitle(args[0]);

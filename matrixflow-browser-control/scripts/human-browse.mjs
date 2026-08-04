@@ -134,9 +134,10 @@ async function connectTab(profileSpec, tabSelector) {
   const pinSelector = at > 0 ? profileSpec.slice(at + 1) : "";
   let profileDir = findProfileDir(profile);
   if (!profileDir) {
-    const running = await api("/api/v1/profiles/running");
-    const id = (running.data || []).find((p) => p.profileId === profile)?.profileId;
-    if (id) profileDir = findProfileDir(id);
+    const full = await api("/api/v1/profiles");
+    const items = full.data?.items || full.data || [];
+    const item = items.find((p) => p.id === profile || p.name === profile);
+    if (item) profileDir = findProfileDir(item.id);
   }
   if (!profileDir) throw new Error(`Profile ${profile} is not running`);
   const portFile = readFileSync(join(profileDir, "DevToolsActivePort"), "utf8");

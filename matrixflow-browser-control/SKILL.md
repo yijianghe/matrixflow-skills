@@ -40,7 +40,13 @@ node scripts/mf-browser.mjs text <id|name>
 | `status` | 显示应用状态、API 地址、Token、userData 路径 |
 | `list` | 列出运行中的环境（profileId、状态、url） |
 | `open <id\|name> [url ...]` | 打开环境窗口（可带启动网址），等待就绪后返回 |
+| `open-batch <id1,id2,...>` | 并发批量打开多个环境（每批 3 个，速度快） |
+| `create <name...> [--count N] [--prefix P]` | 新建环境（指纹克隆自第一个环境；--count 批量、--prefix 命名前缀） |
+| `delete <id\|name>` | 删除环境 |
 | `close <id\|name>` | 关闭环境窗口 |
+| `automa-open <workflowId> [--profile <id>] [--name <name>]` | 打开 Automa 设计器编辑工作流 |
+| `workflow-create <workflowId> [name]` | 新建 Automa 工作流 |
+| `workflow-list` | 列出全部工作流（精简摘要） |
 | `pages <id\|name>` | 列出环境窗口里的所有标签页（带序号） |
 | `navigate <id\|name> <url>` | 导航到网址（自动等待页面加载完成） |
 | `title <id\|name>` | 显示当前页面 url + title |
@@ -97,6 +103,33 @@ node scripts/human-browse.mjs <profileSpec> <feedUrl> --notes 5 --like 3
 - 示例：`node scripts/human-browse.mjs cmse…@小红书 https://www.xiaohongshu.com/explore --notes 5 --like 3`
 
 站点注意点：小红书要点击笔记**卡片**（`section.note-item`），而不是卡片里的 `<a>` 锚点（它的矩形是 0，点不到）；笔记详情链接通常带 `xsec_token`，直接重开可能被重定向回列表。
+
+## 小红书陪跑导师（养号 / 截留）
+
+当用户要求“写小红书养号/截留/引流脚本”时，把你自己当作陪跑导师，按以下流程走（脚本：`scripts/xhs-marketing.mjs`）：
+
+1. **先问清楚**（如果用户没说全）：行业/产品是什么、目标城市、引流平台（默认小红书）、种草话术的风格/素材。
+2. **打标签（tag）**：用行业关键词搜索并真人式浏览几篇，训练账号的推荐算法：
+   ```bash
+   node scripts/xhs-marketing.mjs <profileSpec> tag <关键词...> --notes 5
+   ```
+3. **选爆款（pick）**：搜索并按点赞数排序，找到评论区截留的最佳目标：
+   ```bash
+   node scripts/xhs-marketing.mjs <profileSpec> pick <关键词...> --top 3
+   ```
+4. **评论区截留（intercept / full）**：在爆款笔记下发布种草评论（先向用户确认话术再发布）：
+   ```bash
+   node scripts/xhs-marketing.mjs <profileSpec> intercept <笔记URL> --comment "成都这家SPA真的很好，环境舒服手法专业，姐妹可以冲！"
+   node scripts/xhs-marketing.mjs <profileSpec> full <关键词...> --comment "<话术>"
+   ```
+
+陪跑建议（根据用户行业给出具体方案，例如 SPA 引流）：
+- 关键词矩阵：城市+品类（如“成都 spa”“成都按摩”）、功效词（“古法”“精油”“缓解疲劳”）、场景词（“加班后”“探店”）；
+- 爆款标准：点赞高 + 评论活跃 + 发布时间新；
+- 截留话术：像真实用户体验分享（首段经历+一句推荐+引导私信），避免广告味、避免重复刷屏；
+- 节奏：同一账号每日截留 2-3 条即可，过多会触发风控。
+
+注意：**新创建的环境没有平台登录态**（会显示“登录后查看”），先用已登录的环境（或让用户在新环境里扫码登录），再执行以上脚本；发布评论前务必让用户确认话术内容。
 
 ## 规则与提示
 
