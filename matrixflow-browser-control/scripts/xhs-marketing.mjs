@@ -7,7 +7,7 @@
  * 用法：
  *   node scripts/xhs-marketing.mjs <profileSpec> tag <关键词...> [--notes N]
  *   node scripts/xhs-marketing.mjs <profileSpec> pick <关键词...> [--top N]
- *   node scripts/xhs-marketing.mjs <profileSpec> intercept <笔记URL> --comment <种草话术>
+ *   node scripts/xhs-marketing.mjs <profileSpec> intercept <关键词> --title <标题片段> --comment <种草话术>
  *   node scripts/xhs-marketing.mjs <profileSpec> full <关键词...> --comment <种草话术> [--notes N] [--top N]
  *
  * 动作：
@@ -236,11 +236,71 @@ async function search(cdp, keyword) {
   await sleep(rand(1800, 3200));
 }
 
-async function openNote(cdp, href) {
-  const full = href.startsWith("http") ? href : `https://www.xiaohongshu.com${href}`;
-  await cdp.send("Page.navigate", { url: full });
-  await waitReady(cdp, 20_000);
+async function openCardAndFollow(cdp, port, titleMatch) {
+  // 记录点击前的标签，识别“新标签打开”的情况
+  const beforeIds = new Set((await pageTargets(port)).map((t) => t.id));
+  const feedUrl = (await ev(cdp, "location.href")) || "";
+  const rect = await ev(
+    cdp,
+    `(() => {
+      const cards = Array.from(document.querySelectorAll('section.note-item'));
+      const el = (${JSON.stringify(titleMatch)}
+        ? cards.find(c => ((c.querySelector('.title')||{}).textContent||'').includes(${JSON.stringify(titleMatch)}))
+        : null) || cards[0];
+      if (!el) return null;
+      el.scrollIntoView({block:'center'});
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+    })()`
+  );
+  if (!rect) return false;
+  const { x, y } = JSON.parse(rect);
+  await clickAt(cdp, x, y);
+
+  // 等待详情：新标签或同标签跳转
+  let noteCdp = cdp;
+  let newTab = false;
+  let targetId = null;
+  let entered = false;
+  for (let i = 0; i < 40; i++) {
+    const pages = await pageTargets(port);
+    const newPage = pages.find((t) => !beforeIds.has(t.id) && t.type === "page");
+    if (newPage) {
+      const nc = makeCdp(newPage.webSocketDebuggerUrl);
+      await nc.send("Runtime.enable").catch(() => void 0);
+      await nc.send("Page.bringToFront").catch(() => void 0);
+      noteCdp = nc;
+      newTab = true;
+      entered = true;
+      targetId = newPage.id;
+      break;
+    }
+    const cur = (await ev(cdp, "location.href")) || "";
+    if (cur !== feedUrl && /\/explore\/\w{20,}|\/discovery\/item\/\w{20,}/.test(cur)) {
+      entered = true;
+      break;
+    }
+    await sleep(250);
+  }
+  if (!entered) return false;
+  await waitReady(noteCdp, 10_000);
   await sleep(rand(1800, 3000));
+  return { cdp: noteCdp, newTab, targetId, port };
+}
+
+async function openNoteByTitle(cdp, port, keyword, titleMatch) {
+  await search(cdp, keyword);
+  let cards = [];
+  for (let i = 0; i < 3; i++) {
+    cards = await collectNotes(cdp, 30);
+    if (cards.length > 0) break;
+    await sleep(1200);
+  }
+  const card = titleMatch ? cards.find((c) => c.title.includes(titleMatch)) : null;
+  const target = card || cards[0];
+  console.error(`[xhs] keyword=${keyword} cards=${cards.length} match=${card ? "yes" : "no"} target=${target ? target.title : "none"}`);
+  if (!target) return false;
+  return openCardAndFollow(cdp, port, target.title);
 }
 
 async function postComment(cdp, text) {
@@ -248,22 +308,31 @@ async function postComment(cdp, text) {
   const focused = await ev(
     cdp,
     `(() => {
-      const el = document.querySelector('#comment-input, .comment-input, textarea[placeholder*="评论"], [contenteditable="true"][class*="comment"], .editor[contenteditable="true"]');
+      const el = document.querySelector('#comment-input, .comment-input, .content-input, textarea[placeholder*="评论"], [contenteditable="true"][class*="comment"], .editor[contenteditable="true"], .comment-box [contenteditable="true"]');
       if (!el) return false;
-      el.focus();
-      el.click();
-      return true;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
     })()`
   );
   if (!focused) return { ok: false, reason: "comment-input-not-found" };
+  const { x, y } = JSON.parse(focused);
+  await clickAt(cdp, x, y); // 真实点击评论框，触发 React 聚焦
   await sleep(rand(500, 1000));
   await cdp.send("Input.insertText", { text: String(text) });
   await sleep(rand(600, 1200));
+  // 校验文字真的进入了输入框
+  const entered = await ev(cdp, `(document.querySelector('.content-input, .comment-input')||{}).textContent || ''`);
+  if (!entered || !String(entered).includes(String(text).slice(0, 8))) {
+    return { ok: false, reason: "text-not-entered", entered: String(entered || "").slice(0, 30) };
+  }
   // 点发布
   const rect = await ev(
     cdp,
     `(() => {
-      const btn = [...document.querySelectorAll('button, [role="button"]')].find(b => (b.textContent||'').replace(/\\s+/g,'').includes('发布') && b.offsetParent !== null);
+      const btn = [...document.querySelectorAll('button, [role="button"]')].find(b => {
+        const t = (b.textContent||'').replace(/\\s+/g,'');
+        return /^(发布|发送)$/.test(t) && b.offsetParent !== null;
+      }) || [...document.querySelectorAll('[class*="comment-submit"], [class*="submit"][class*="comment"]')].find(b => b.offsetParent !== null);
       if (!btn) return null;
       btn.scrollIntoView({block:'center'});
       const r = btn.getBoundingClientRect();
@@ -271,10 +340,12 @@ async function postComment(cdp, text) {
     })()`
   );
   if (!rect) return { ok: false, reason: "publish-button-not-found" };
-  const { x, y } = JSON.parse(rect);
-  await clickAt(cdp, x, y);
+  const pb = JSON.parse(rect);
+  await clickAt(cdp, pb.x, pb.y);
   await sleep(rand(1200, 2000));
-  return { ok: true };
+  // 校验：提交后输入框应被清空（说明已发出）
+  const after = await ev(cdp, `(document.querySelector('.content-input, .comment-input')||{}).textContent || ''`);
+  return { ok: String(after || "").trim() === "", submitted: true };
 }
 
 async function main() {
@@ -311,10 +382,18 @@ async function main() {
         for (const card of cards) {
           if (opened >= notes) break;
           if (!card.href) continue;
-          await openNote(cdp, card.href);
+          const res = await openCardAndFollow(cdp, port, card.title);
+          if (!res) continue;
           await sleep(rand(1800, 3000));
-          await ev(cdp, "history.back()");
-          await waitReady(cdp, 15_000);
+          if (res.newTab) {
+            try {
+              await fetch(`http://127.0.0.1:${port}/json/close/${res.targetId}`);
+            } catch {}
+            res.cdp.close();
+          } else {
+            await ev(res.cdp, "history.back()").catch(() => {});
+            await waitReady(res.cdp, 15_000);
+          }
           await sleep(rand(1200, 2200));
           opened += 1;
         }
@@ -330,14 +409,30 @@ async function main() {
         log.push({ keyword: kw, top: cards });
       }
     } else if (action === "intercept") {
-      const noteUrl = keywords[0];
+      const keyword = keywords[0];
+      const titleMatch = (() => {
+        for (let i = 2; i < args.length; i++) {
+          if (args[i] === "--title") return args[i + 1] || "";
+        }
+        return "";
+      })();
       if (!comment) {
         console.error("intercept 需要 --comment 种草话术");
         process.exit(1);
       }
-      await openNote(cdp, noteUrl);
-      const result = await postComment(cdp, comment);
-      log.push({ note: noteUrl, comment: comment.slice(0, 40), result });
+      const opened = await openNoteByTitle(cdp, port, keyword, titleMatch);
+      if (!opened) {
+        console.error(`未找到笔记: ${keyword} / ${titleMatch}`);
+        process.exit(1);
+      }
+      const result = await postComment(opened.cdp, comment);
+      log.push({ keyword, title: titleMatch, comment: comment.slice(0, 40), result });
+      if (opened.newTab) {
+        try {
+          await fetch(`http://127.0.0.1:${port}/json/close/${opened.targetId}`);
+        } catch {}
+        opened.cdp.close();
+      }
     } else if (action === "full") {
       if (!comment) {
         console.error("full 需要 --comment 种草话术");
@@ -353,9 +448,19 @@ async function main() {
           log.push({ keyword: kw, result: "no-note" });
           continue;
         }
-        await openNote(cdp, target.href);
-        const result = await postComment(cdp, comment);
+        const res = await openCardAndFollow(cdp, port, target.title);
+        if (!res) {
+          log.push({ keyword: kw, result: "open-failed" });
+          continue;
+        }
+        const result = await postComment(res.cdp, comment);
         log.push({ keyword: kw, target: target.title, likes: target.likes, result });
+        if (res.newTab) {
+          try {
+            await fetch(`http://127.0.0.1:${port}/json/close/${res.targetId}`);
+          } catch {}
+          res.cdp.close();
+        }
         await sleep(rand(1500, 2500));
       }
     } else {

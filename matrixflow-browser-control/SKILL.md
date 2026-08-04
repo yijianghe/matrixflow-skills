@@ -119,7 +119,7 @@ node scripts/human-browse.mjs <profileSpec> <feedUrl> --notes 5 --like 3
    ```
 4. **评论区截留（intercept / full）**：在爆款笔记下发布种草评论（先向用户确认话术再发布）：
    ```bash
-   node scripts/xhs-marketing.mjs <profileSpec> intercept <笔记URL> --comment "成都这家SPA真的很好，环境舒服手法专业，姐妹可以冲！"
+node scripts/xhs-marketing.mjs <profileSpec> intercept <关键词> --title <标题片段> --comment "成都这家SPA真的很好，环境舒服手法专业，姐妹可以冲！"
    node scripts/xhs-marketing.mjs <profileSpec> full <关键词...> --comment "<话术>"
    ```
 
