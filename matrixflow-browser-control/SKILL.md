@@ -1,92 +1,114 @@
 ---
 name: matrixflow-browser-control
-description: 'Control the MatrixFlow antidetect browser (windows = environments) from the agent: open/close browser windows, navigate web pages, click, type, scroll, extract text, run JS, take screenshots. Use when the user asks to drive the MatrixFlow browser (or a browser window/environment) to browse a website, search, fill forms, scrape pages, check pages, or perform web tasks through the installed MatrixFlow browser.'
+description: '控制 MatrixFlow 指纹浏览器（窗口=环境）：打开/关闭浏览器窗口、浏览网页、点击、输入、滚动、提取文本、执行 JS、截图。当用户要求用 MatrixFlow 浏览器（或某个浏览器窗口/环境）浏览网站、搜索、填表单、采集页面、查看页面或完成网页任务时使用。'
 ---
 
-# MatrixFlow Browser Control
+# MatrixFlow 浏览器控制技能
 
-Drive MatrixFlow's antidetect browser windows ("environments") via the local HTTP API and Chrome DevTools Protocol (CDP). This is the agent-side equivalent of an AI takeover of a browser window: open a real browser window, navigate it, interact with pages, read content, and capture screenshots.
+通过本地 HTTP API 和 Chrome DevTools 协议（CDP）驱动 MatrixFlow 指纹浏览器的窗口（"环境"）。这是 AI 接管浏览器窗口的完整能力：打开真实浏览器窗口、导航页面、与页面交互、读取内容、截图。
 
-## Prerequisites
+## 前置条件
 
-- MatrixFlow desktop app is running (start it if `status` says the API is unreachable).
-- Node.js >= 22 on PATH (the script uses built-in `fetch` + `WebSocket` only).
-- Script: `scripts/mf-browser.mjs` (run with `node`).
+- MatrixFlow 桌面应用正在运行（如果 `status` 显示 API 不可达，先启动应用）。
+- Node.js >= 22（脚本只使用内置的 `fetch` + `WebSocket`，无任何 npm 依赖）。
+- 脚本：`scripts/mf-browser.mjs`（用 `node` 运行）。
 
-## Quick start
+## 快速开始
 
 ```bash
-node scripts/mf-browser.mjs status          # confirm app running + token present
-node scripts/mf-browser.mjs list            # list running environments (windows)
-node scripts/mf-browser.mjs open <id|name>  # open an environment window
+node scripts/mf-browser.mjs status          # 确认应用在运行 + Token 正常
+node scripts/mf-browser.mjs list            # 列出运行中的环境（窗口）
+node scripts/mf-browser.mjs open <id|name>  # 打开一个环境窗口
 node scripts/mf-browser.mjs navigate <id|name> https://example.com
 node scripts/mf-browser.mjs text <id|name>
 ```
 
-Always run `status` first: it prints the API base URL, whether the app is running, and whether the token was found. If the app is not running, start it, then re-check.
+先运行 `status`：它会输出 API 地址、应用是否在运行、Token 是否存在。如果应用没在运行，先启动 MatrixFlow，再重新检查。
 
-## Workflow
+## 工作流程
 
-1. **Ensure the app is up**: `node scripts/mf-browser.mjs status`. If `appRunning` is false, start MatrixFlow and wait for its API (a few seconds), then re-run.
-2. **Pick a window**: `node scripts/mf-browser.mjs list` returns running environments. Use an exact `profileId` (or name) for all subsequent commands.
-3. **Open one if needed**: `open <id|name> [url ...]` starts the environment; wait ~5-10 seconds for Chromium to boot before operating.
-4. **Interact**: navigate → wait for load → read `text`/`title` → `click`/`type`/`scroll` → verify with `text` or `screenshot`.
-5. **Clean up**: `close <id|name>` when done (optional; leave windows open if the user wants them).
+1. **确认应用在运行**：`node scripts/mf-browser.mjs status`。如果 `appRunning` 为 false，启动 MatrixFlow 并等待几秒后重试。
+2. **选择窗口**：`node scripts/mf-browser.mjs list` 返回运行中的环境。后续所有命令使用其中的精确 `profileId`（或名称）。
+3. **如需打开窗口**：`open <id|name> [url ...]` 启动环境，命令会等待 Chromium CDP 就绪后返回，无需再盲目等待。
+4. **交互**：导航 → 等待加载 → 读取 `text`/`title` → `click`/`type`/`scroll` → 用 `text` 或 `screenshot` 验证。
+5. **收尾**：完成后 `close <id|name>`（可选；用户想保留窗口就不关）。
 
-## Commands
+## 命令一览
 
-| Command | Purpose |
+| 命令 | 作用 |
 | --- | --- |
-| `status` | Show app status, API base, token presence, userData path |
-| `list` | List running environments (profileId, status, url) |
-| `open <id\|name> [url ...]` | Open an environment, optionally with startup URLs |
-| `close <id\|name>` | Close an environment window |
-| `pages <id\|name>` | List the page tabs of a running environment (with index) |
-| `navigate <id\|name> <url>` | Navigate the active page to a URL |
-| `title <id\|name>` | Print active page `url` + `title` |
-| `text <id\|name> [maxChars]` | Extract visible page text (default 8000 chars) |
-| `eval <id\|name> '<js>'` | Run JS in the page and print the result (or pass `-` and pipe JS via stdin to avoid shell quoting issues) |
-| `screenshot <id\|name> <file.png>` | Save a screenshot of the page |
-| `click <id\|name> <cssSelector>` | Click the center of the first matching element |
-| `type <id\|name> <cssSelector> <text>` | Focus the element and insert text |
-| `scroll <id\|name> [deltaY]` | Scroll the page (default 500) |
-| `run <id\|name> '<steps-json>'` | Batch steps in ONE connection (fastest for multi-step tasks; also accepts `-` + stdin). Steps: `navigate{url}`, `wait{ms}`, `waitRandom{min,max}`, `waitReady{timeout}`, `eval{js}`, `click{selector}`, `type{selector,text}`, `scroll{deltaY}`, `text{max}`, `title`, `screenshot{path}` |
+| `status` | 显示应用状态、API 地址、Token、userData 路径 |
+| `list` | 列出运行中的环境（profileId、状态、url） |
+| `open <id\|name> [url ...]` | 打开环境窗口（可带启动网址），等待就绪后返回 |
+| `close <id\|name>` | 关闭环境窗口 |
+| `pages <id\|name>` | 列出环境窗口里的所有标签页（带序号） |
+| `navigate <id\|name> <url>` | 导航到网址（自动等待页面加载完成） |
+| `title <id\|name>` | 显示当前页面 url + title |
+| `text <id\|name> [maxChars]` | 提取页面可见文本（默认 8000 字） |
+| `eval <id\|name> '<js>'` | 在页面执行 JS 并输出结果（传 `-` 可从 stdin 读，避免引号问题） |
+| `screenshot <id\|name> <file.png>` | 保存页面截图 |
+| `click <id\|name> <cssSelector>` | 点击元素中心（自动滚动进视口；传 `-` 可从 stdin 读选择器） |
+| `type <id\|name> <cssSelector> <text>` | 聚焦元素并输入文字（选择器可传 `-` 从 stdin 读） |
+| `scroll <id\|name> [deltaY]` | 滚动页面（默认 500） |
+| `run <id\|name> '<steps-json>'` | 一次连接批量执行多步操作（传 `-` 从 stdin 读 JSON） |
 
-## Speed
+## run 批量模式（多步任务最快）
 
-- Commands connect directly to the page-level DevTools websocket (no browser-level attach round-trip).
-- `navigate` and `waitReady` poll `document.readyState` instead of fixed sleeps.
-- `open` returns once the window is CDP-ready, so callers do not need to guess boot time.
-- `click` auto-scrolls the target into view before clicking (elements below the fold otherwise receive no hit).
-- Every operation activates the operated tab first (`Page.bringToFront`), so the window shows the page being driven.
-- `click`/`type` also accept the selector via stdin (`-`) when shell quoting of CSS selectors is a problem.
-- For multi-step tasks always prefer `run`: it keeps ONE connection and executes steps in a few milliseconds each. Example: open a page, wait, mark + click a like button, verify, screenshot — ~5-6s total including page load.
+`run` 在**同一条 CDP 连接**里依次执行一串操作，每步只需几毫秒，避免多次启动进程和重连。步骤（JSON 数组）：
 
-## Human-like browsing
+- `{"op":"navigate","url":"...","waitReady":true}` — 导航（默认等待加载完成）
+- `{"op":"wait","ms":1000}` — 固定等待
+- `{"op":"waitRandom","min":300,"max":1200}` — 随机等待（模拟真人节奏）
+- `{"op":"waitReady","timeout":15000}` — 等待页面就绪
+- `{"op":"eval","js":"..."}` — 执行 JS
+- `{"op":"click","selector":"..."}` — 点击（自动滚动进视口）
+- `{"op":"type","selector":"...","text":"..."}` — 输入文字
+- `{"op":"scroll","deltaY":500}` — 滚动
+- `{"op":"text","max":2000}` — 提取文本
+- `{"op":"title"}` — 获取 url + title
+- `{"op":"screenshot","path":"..."}` — 截图
 
-`scripts/human-browse.mjs` simulates a real person reading a feed: it opens each note, switches images, scrolls comments, waits random human-like intervals, and optionally likes a chosen note. It handles sites that open notes in a new tab (follows the new tab, operates it, closes it) and sites that navigate the same tab (goes back).
+示例：打开页面 → 等加载 → 点赞 → 验证 → 截图：
+
+```bash
+echo '[{"op":"navigate","url":"https://example.com"},{"op":"waitReady"},{"op":"eval","js":"document.title"},{"op":"screenshot","path":"D:\\shot.png"}]' | node scripts/mf-browser.mjs run <id|name> -
+```
+
+## 速度设计
+
+- 命令直接连接**页面级** DevTools WebSocket（跳过浏览器级 attach 的往返）。
+- `navigate` / `waitReady` 轮询 `document.readyState`，不再固定等待。
+- `open` 等窗口 CDP 就绪后才返回。
+- `click` 自动把目标滚动到视口中间再点（屏幕外的元素点了没反应）。
+- 每次操作前会先激活目标标签页（`Page.bringToFront`），保证操作落在用户当前看到的页面上。
+- 多步任务优先用 `run`：一次连接，页面加载后每步几毫秒。
+
+## 真人式浏览
+
+`scripts/human-browse.mjs` 模拟真人浏览信息流：打开每篇笔记、切换图片、滚动评论区、随机人味节奏、给指定笔记点赞。支持“新标签页打开”的网站（跟随新标签→操作→关闭→回到列表）和“同标签跳转”的网站（返回上一页）。
 
 ```bash
 node scripts/human-browse.mjs <profileSpec> <feedUrl> --notes 5 --like 3
 ```
 
-- `--notes N` — how many notes to browse (default 5).
-- `--like N` — like the Nth note (1-based; 0 = skip, default 0).
-- `--shot PATH` — final screenshot path.
-- Example: `node scripts/human-browse.mjs cmse…@小红书 https://www.xiaohongshu.com/explore --notes 5 --like 3`
-- Site quirks: on xiaohongshu, click the note CARD (`section.note-item`), not the inner anchor (its rect is zero); note URLs may need an `xsec_token` to reopen directly.
+- `--notes N` — 浏览几篇笔记（默认 5）
+- `--like N` — 给第 N 篇点赞（从 1 开始；0 = 不点赞，默认 0）
+- `--shot PATH` — 最终截图保存路径
+- 示例：`node scripts/human-browse.mjs cmse…@小红书 https://www.xiaohongshu.com/explore --notes 5 --like 3`
 
-## Rules and notes
+站点注意点：小红书要点击笔记**卡片**（`section.note-item`），而不是卡片里的 `<a>` 锚点（它的矩形是 0，点不到）；笔记详情链接通常带 `xsec_token`，直接重开可能被重定向回列表。
 
-- **Identifiers**: use the exact `profileId` from `list` (or a profile name). If a profile is not running, `open` it first; CDP commands need a running window.
-- **Window model**: each environment is one browser window that may contain several tabs. By default commands operate the first non-internal page tab. If a window has multiple tabs, run `pages` first, then pin a tab for all page commands. **Prefer `profileId@<url-substring>` (e.g. `cmse…@wd=Codex`); tab indexes can shift when tabs are opened/closed/reordered, so `@<index>` is less reliable.** If the page is a MatrixFlow internal start page (`browser.lingjingxia.com/browser-start`), navigate to the real target URL first.
-- **Waiting**: after `navigate`, wait 2-5 seconds (or poll `title`/`text`) before acting; pages load asynchronously.
-- **selectors**: standard CSS selectors. `click` uses the element's bounding-box center via CDP input events (real page interaction). `type` focuses the element then inserts text.
-- **eval results**: primitive values print as-is; objects print as JSON.
-- **Screenshots**: saved as PNG at the given path (use an absolute path). Inspect the image afterward to verify page state.
-- **Multi-step tasks**: prefer short round-trips: navigate → read text → decide → click/type → verify. Re-read `text` after actions to confirm effects.
-- **Failure handling**: "Profile has no DevToolsActivePort" means the window is not running yet — wait and retry, or `open` it. "API 401" means the token file is missing — get the token from app Settings → API 文档.
+## 规则与提示
 
-## Reference
+- **标识符**：使用 `list` 输出的精确 `profileId`（或名称）。未运行的窗口要先 `open`，CDP 命令需要窗口在运行。
+- **多标签页**：一个窗口可能含多个标签。默认操作“第一个非内部页面标签”。标签多时先 `pages` 查看，然后用 `profileId@网址片段`（如 `cmse…@wd=Codex`）锁定标签；**优先用网址片段而不是序号**，因为序号会随标签开关变化。
+- **等待**：`navigate` 已自动等待加载完成；如页面内容异步渲染，可再用 `waitReady` 或 `text` 轮询确认。
+- **选择器**：标准 CSS 选择器。`click` 用真实 CDP 鼠标事件点击元素中心；`type` 聚焦后插入文字。
+- **eval 结果**：基础类型直接输出，对象输出 JSON。
+- **截图**：保存为 PNG（用绝对路径），之后可查看图片确认页面状态。
+- **多步任务**：导航 → 读文本 → 决策 → 点击/输入 → 验证，尽量短平快。
+- **报错处理**：`Profile ... has no DevToolsActivePort` = 窗口还没起来，等待后重试或先 `open`；`API 401` = Token 文件缺失，去应用"设置 → API 文档"里复制 Token。
 
-For the local API details (auth, endpoints, CDP layout, troubleshooting) see `references/api.md`.
+## 参考
+
+本地 API 详情（认证、接口、CDP 布局、故障排查）见 `references/api.md`。
