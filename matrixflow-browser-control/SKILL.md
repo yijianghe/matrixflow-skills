@@ -50,7 +50,7 @@ Always run `status` first: it prints the API base URL, whether the app is runnin
 | `click <id\|name> <cssSelector>` | Click the center of the first matching element |
 | `type <id\|name> <cssSelector> <text>` | Focus the element and insert text |
 | `scroll <id\|name> [deltaY]` | Scroll the page (default 500) |
-| `run <id\|name> '<steps-json>'` | Batch steps in ONE connection (fastest for multi-step tasks; also accepts `-` + stdin). Steps: `navigate{url}`, `wait{ms}`, `waitReady{timeout}`, `eval{js}`, `click{selector}`, `type{selector,text}`, `scroll{deltaY}`, `text{max}`, `title`, `screenshot{path}` |
+| `run <id\|name> '<steps-json>'` | Batch steps in ONE connection (fastest for multi-step tasks; also accepts `-` + stdin). Steps: `navigate{url}`, `wait{ms}`, `waitRandom{min,max}`, `waitReady{timeout}`, `eval{js}`, `click{selector}`, `type{selector,text}`, `scroll{deltaY}`, `text{max}`, `title`, `screenshot{path}` |
 
 ## Speed
 
@@ -58,7 +58,23 @@ Always run `status` first: it prints the API base URL, whether the app is runnin
 - `navigate` and `waitReady` poll `document.readyState` instead of fixed sleeps.
 - `open` returns once the window is CDP-ready, so callers do not need to guess boot time.
 - `click` auto-scrolls the target into view before clicking (elements below the fold otherwise receive no hit).
+- Every operation activates the operated tab first (`Page.bringToFront`), so the window shows the page being driven.
+- `click`/`type` also accept the selector via stdin (`-`) when shell quoting of CSS selectors is a problem.
 - For multi-step tasks always prefer `run`: it keeps ONE connection and executes steps in a few milliseconds each. Example: open a page, wait, mark + click a like button, verify, screenshot — ~5-6s total including page load.
+
+## Human-like browsing
+
+`scripts/human-browse.mjs` simulates a real person reading a feed: it opens each note, switches images, scrolls comments, waits random human-like intervals, and optionally likes a chosen note. It handles sites that open notes in a new tab (follows the new tab, operates it, closes it) and sites that navigate the same tab (goes back).
+
+```bash
+node scripts/human-browse.mjs <profileSpec> <feedUrl> --notes 5 --like 3
+```
+
+- `--notes N` — how many notes to browse (default 5).
+- `--like N` — like the Nth note (1-based; 0 = skip, default 0).
+- `--shot PATH` — final screenshot path.
+- Example: `node scripts/human-browse.mjs cmse…@小红书 https://www.xiaohongshu.com/explore --notes 5 --like 3`
+- Site quirks: on xiaohongshu, click the note CARD (`section.note-item`), not the inner anchor (its rect is zero); note URLs may need an `xsec_token` to reopen directly.
 
 ## Rules and notes
 

@@ -241,6 +241,8 @@ async function connectPage(profileSpec) {
   }
   const cdp = makeCdp(page.webSocketDebuggerUrl);
   await cdp.send("Runtime.enable");
+  // 把目标标签页激活为窗口的活动标签页，确保操作落在用户当前看到的页面上
+  await cdp.send("Page.bringToFront").catch(() => void 0);
   return { cdp, page, port };
 }
 
@@ -418,7 +420,10 @@ async function cmdScreenshot(profile, output) {
 }
 
 async function cmdClick(profile, selector) {
-  if (!selector) throw new Error("Usage: click <profile> <cssSelector>");
+  if (!selector || selector === "-") {
+    selector = await readStdin();
+  }
+  if (!selector) throw new Error("Usage: click <profile> <cssSelector>  (or pipe selector via stdin with '-')");
   const { cdp } = await connectPage(profile);
   try {
     const rect = await evalInPage(
@@ -436,7 +441,10 @@ async function cmdClick(profile, selector) {
 }
 
 async function cmdType(profile, selector, text) {
-  if (!selector || text === undefined) throw new Error("Usage: type <profile> <cssSelector> <text>");
+  if (!selector || selector === "-") {
+    selector = await readStdin();
+  }
+  if (!selector) throw new Error("Usage: type <profile> <cssSelector> <text>");
   const { cdp } = await connectPage(profile);
   try {
     const focused = await evalInPage(
@@ -487,6 +495,14 @@ async function cmdRun(profile, stepsJson) {
           await sleep(Number(step.ms) || 500);
           value = "ok";
           break;
+        case "waitRandom": {
+          const min = Number(step.min) || 300;
+          const max = Number(step.max) || 1200;
+          const ms = Math.floor(min + Math.random() * Math.max(0, max - min));
+          await sleep(ms);
+          value = ms;
+          break;
+        }
         case "waitReady":
           value = await waitReady(cdp, step.timeout || 20_000);
           break;
