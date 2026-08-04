@@ -54,7 +54,7 @@ Always run `status` first: it prints the API base URL, whether the app is runnin
 ## Rules and notes
 
 - **Identifiers**: use the exact `profileId` from `list` (or a profile name). If a profile is not running, `open` it first; CDP commands need a running window.
-- **Window model**: each environment is one browser window that may contain several tabs. By default commands operate the first non-internal page tab. If a window has multiple tabs, run `pages` first, then pin a tab with `profileId@<index>` (e.g. `cmse…@1`) or `profileId@<url-substring>` (e.g. `cmse…@baidu.com`) for all page commands. If the page is a MatrixFlow internal start page (`browser.lingjingxia.com/browser-start`), navigate to the real target URL first.
+- **Window model**: each environment is one browser window that may contain several tabs. By default commands operate the first non-internal page tab. If a window has multiple tabs, run `pages` first, then pin a tab for all page commands. **Prefer `profileId@<url-substring>` (e.g. `cmse…@wd=Codex`); tab indexes can shift when tabs are opened/closed/reordered, so `@<index>` is less reliable.** If the page is a MatrixFlow internal start page (`browser.lingjingxia.com/browser-start`), navigate to the real target URL first.
 - **Waiting**: after `navigate`, wait 2-5 seconds (or poll `title`/`text`) before acting; pages load asynchronously.
 - **selectors**: standard CSS selectors. `click` uses the element's bounding-box center via CDP input events (real page interaction). `type` focuses the element then inserts text.
 - **eval results**: primitive values print as-is; objects print as JSON.
