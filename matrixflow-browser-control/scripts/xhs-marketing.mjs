@@ -8,6 +8,9 @@
  *   node scripts/xhs-marketing.mjs <profileSpec> tag <关键词...> [--notes N]
  *   node scripts/xhs-marketing.mjs <profileSpec> pick <关键词...> [--top N]
  *   node scripts/xhs-marketing.mjs <profileSpec> intercept <关键词> --title <标题片段> --comment <种草话术>
+ *   node scripts/xhs-marketing.mjs <profileSpec> scan <关键词...> --top N [--city 城市]    截流扫描：读同行评论区，分辨意向客户
+ *   node scripts/xhs-marketing.mjs <profileSpec> reply <关键词> --to <评论片段> --comment <回复话术> [--title <标题片段>]
+ *   node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top N              爆改参考：收集爆款结构+评论区高频问题
  *   node scripts/xhs-marketing.mjs <profileSpec> full <关键词...> --comment <种草话术> [--notes N] [--top N]
  *
  * 动作：
@@ -15,6 +18,9 @@
  *   pick       选爆款：搜索并按点赞数排序输出 Top N
  *   intercept  截留：在指定笔记下发布一条种草评论
  *   full       完整流程：搜索 → 选爆款 → 打开 → 评论区截留
+ *   scan       截流扫描：找同行笔记，读评论区，标记求地址/求推荐/问价格等意向客户
+ *   reply      评论区回复截留：给目标评论种草式回复
+ *   reference  爆改参考：收集爆款标题/点赞/评论区问题，供改写发布
  */
 
 import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
@@ -348,6 +354,92 @@ async function postComment(cdp, text) {
   return { ok: String(after || "").trim() === "", submitted: true };
 }
 
+async function likeOrCollect(cdp) {
+  // 低频互动：约 35% 点赞、15% 收藏，防查重
+  const roll = Math.random();
+  if (roll > 0.5) return { action: "none" };
+  const like = roll <= 0.35;
+  const selector = like
+    ? "#detail-like .like-wrapper, .engage-bar .like-wrapper, .like-wrapper"
+    : ".collect-wrapper, #collect-btn, [class*=collect]";
+  const rect = await ev(
+    cdp,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      el.scrollIntoView({block:'center'});
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+    })()`
+  );
+  if (!rect) return { action: "none" };
+  const { x, y } = JSON.parse(rect);
+  await clickAt(cdp, x, y);
+  await sleep(rand(900, 1800));
+  return { action: like ? "like" : "collect" };
+}
+
+async function collectComments(cdp) {
+  const raw = await ev(
+    cdp,
+    `(() => {
+      const out = [];
+      document.querySelectorAll('.comment-item, .comments-container .comment').forEach(c => {
+        const textEl = c.querySelector('.content, [class*=content]');
+        if (!textEl) return;
+        const text = textEl.textContent.trim();
+        if (!text) return;
+        out.push({ text: text.slice(0, 80) });
+      });
+      return JSON.stringify(out.slice(0, 30));
+    })()`
+  );
+  return raw ? JSON.parse(raw) : [];
+}
+
+function classifyIntent(text) {
+  const t = String(text || "").trim();
+  // 只把“像提问”的评论当意向客户，减少把建议/分享误判为客户
+  const looksLikeQuestion =
+    /[?？]$/.test(t) ||
+    /^(求|哪里|在哪|怎么|多少钱|有没有|能|可以|适合|想做|想学|带带|求带)/.test(t);
+  if (!looksLikeQuestion) return "";
+  if (/(\u5730\u5740|\u5728\u54ea|\u54ea\u91cc|\u4f4d\u7f6e|\u6c42\u5730\u5740|\u600e\u4e48\u627e)/.test(t)) return "ask-address";
+  if (/(\u6c42\u63a8\u8350|\u63a8\u8350\u4e00\u4e0b|\u6709\u6ca1\u6709\u63a8\u8350|\u5b89\u5229)/.test(t)) return "ask-recommend";
+  if (/(\u591a\u5c11\u94b1|\u4ef7\u683c|\u600e\u4e48\u4e70|\u94fe\u63a5|\u600e\u4e48\u8054\u7cfb|\u8d5a\u591a\u5c11|\u80fd\u8d5a|\u6210\u672c)/.test(t)) return "ask-price";
+  if (/(\u6c42\u5e26|\u5e26\u5e26\u6211|\u600e\u4e48\u5f00\u59cb|\u60f3\u505a|\u60f3\u5b66|\u9002\u5408\u65b0\u624b|\u6c42\u6559\u7a0b|\u60f3\u8fdb\u5165)/.test(t)) return "intent";
+  return "";
+}
+
+function isLocalTitle(title, city) {
+  if (!city) return null;
+  return String(title || "").includes(city);
+}
+
+async function replyComment(cdp, commentFragment, replyText) {
+  // 找到目标评论的"回复"按钮并点击
+  const rect = await ev(
+    cdp,
+    `(() => {
+      const items = Array.from(document.querySelectorAll('.comment-item, .comments-container .comment'));
+      const target = items.find(c => ((c.querySelector('.content, [class*=content]')||{}).textContent||'').includes(${JSON.stringify(commentFragment)})) || items.find(c => ((c.querySelector('.content, [class*=content]')||{}).textContent||'').includes(${JSON.stringify(String(commentFragment).slice(0, 6))}));
+      if (!target) return null;
+      const btn = [...target.querySelectorAll('button, [role=button], [class*=reply]')].find(b => /^\u56de\u590d$|^\u56de\u590d\u4ed6$|^\u56de\u590d\u5979$/.test((b.textContent||'').replace(/\\s+/g,'')) || /reply/i.test(String(b.className))) || target.querySelector('[class*=reply]');
+      if (!btn) return null;
+      btn.scrollIntoView({block:'center'});
+      const r = btn.getBoundingClientRect();
+      return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+    })()`
+  );
+  if (!rect) return { ok: false, reason: "reply-button-not-found" };
+  const { x, y } = JSON.parse(rect);
+  await clickAt(cdp, x, y);
+  await sleep(rand(600, 1100));
+  // 输入回复并发布
+  const result = await postComment(cdp, replyText);
+  return result;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const profileSpec = args[0];
@@ -385,6 +477,7 @@ async function main() {
           const res = await openCardAndFollow(cdp, port, card.title);
           if (!res) continue;
           await sleep(rand(1800, 3000));
+          await likeOrCollect(res.cdp); // 随机点赞/收藏，低频差异化
           if (res.newTab) {
             try {
               await fetch(`http://127.0.0.1:${port}/json/close/${res.targetId}`);
@@ -462,6 +555,117 @@ async function main() {
           res.cdp.close();
         }
         await sleep(rand(1500, 2500));
+      }
+    } else if (action === "scan") {
+      // 截流扫描：找同行笔记，读评论区，分辨意向客户
+      const city = (() => {
+        for (let i = 2; i < args.length; i++) {
+          if (args[i] === "--city") return args[i + 1] || "";
+        }
+        return "";
+      })();
+      for (const kw of keywords) {
+        await search(cdp, kw);
+        const cards = (await collectNotes(cdp, 30))
+          .map((c) => ({ ...c, likes: parseCount(c.likeText) }))
+          .sort((a, b) => b.likes - a.likes)
+          .slice(0, top);
+        const notes = [];
+        for (const card of cards) {
+          if (!card.href) continue;
+          const res = await openCardAndFollow(cdp, port, card.title);
+          if (!res) continue;
+          const comments = await collectComments(res.cdp);
+          const leads = [];
+          for (const c of comments) {
+            const intent = classifyIntent(c.text);
+            if (intent) {
+              leads.push({ text: c.text, intent });
+            }
+          }
+          const local = isLocalTitle(card.title, city);
+          notes.push({
+            title: card.title,
+            likes: card.likes,
+            local: local === null ? "unknown" : local,
+            leads: leads.slice(0, 10),
+            leadCount: leads.length
+          });
+          if (res.newTab) {
+            try {
+              await fetch(`http://127.0.0.1:${port}/json/close/${res.targetId}`);
+            } catch {}
+            res.cdp.close();
+          } else {
+            await ev(res.cdp, "history.back()").catch(() => {});
+            await waitReady(res.cdp, 15_000);
+          }
+        }
+        log.push({ keyword: kw, notes });
+      }
+    } else if (action === "reply") {
+      // 评论区回复截留：给某条求地址/求推荐的评论种草式回复
+      const keyword = keywords[0];
+      const commentFragment = (() => {
+        for (let i = 2; i < args.length; i++) {
+          if (args[i] === "--to") return args[i + 1] || "";
+        }
+        return "";
+      })();
+      const titleMatch = (() => {
+        for (let i = 2; i < args.length; i++) {
+          if (args[i] === "--title") return args[i + 1] || "";
+        }
+        return "";
+      })();
+      if (!comment || !commentFragment) {
+        console.error("reply 需要 --comment <回复话术> --to <目标评论片段>");
+        process.exit(1);
+      }
+      const opened = await openNoteByTitle(cdp, port, keyword, titleMatch);
+      if (!opened) {
+        console.error(`未找到笔记: ${keyword} / ${titleMatch}`);
+        process.exit(1);
+      }
+      const result = await replyComment(opened.cdp, commentFragment, comment);
+      log.push({ keyword, to: commentFragment.slice(0, 30), reply: comment.slice(0, 40), result });
+      if (opened.newTab) {
+        try {
+          await fetch(`http://127.0.0.1:${port}/json/close/${opened.targetId}`);
+        } catch {}
+        opened.cdp.close();
+      }
+    } else if (action === "reference") {
+      // 爆改参考：收集爆款笔记（标题/点赞/评论区高频问题），供改写发布用
+      for (const kw of keywords) {
+        await search(cdp, kw);
+        const cards = (await collectNotes(cdp, 30))
+          .map((c) => ({ ...c, likes: parseCount(c.likeText) }))
+          .sort((a, b) => b.likes - a.likes)
+          .slice(0, top);
+        const notes = [];
+        for (const card of cards) {
+          if (!card.href) continue;
+          const res = await openCardAndFollow(cdp, port, card.title);
+          if (!res) continue;
+          const comments = await collectComments(res.cdp);
+          notes.push({
+            title: card.title,
+            likes: card.likes,
+            href: card.href,
+            hotQuestions: comments.slice(0, 5).map((c) => c.text.slice(0, 40))
+          });
+          if (res.newTab) {
+            try {
+              await fetch(`http://127.0.0.1:${port}/json/close/${res.targetId}`);
+            } catch {}
+            res.cdp.close();
+          } else {
+            await ev(res.cdp, "history.back()").catch(() => {});
+            await waitReady(res.cdp, 15_000);
+          }
+        }
+        log.push({ keyword: kw, notes });
       }
     } else {
       throw new Error(`未知动作: ${action}`);
