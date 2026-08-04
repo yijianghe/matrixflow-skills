@@ -50,6 +50,15 @@ Always run `status` first: it prints the API base URL, whether the app is runnin
 | `click <id\|name> <cssSelector>` | Click the center of the first matching element |
 | `type <id\|name> <cssSelector> <text>` | Focus the element and insert text |
 | `scroll <id\|name> [deltaY]` | Scroll the page (default 500) |
+| `run <id\|name> '<steps-json>'` | Batch steps in ONE connection (fastest for multi-step tasks; also accepts `-` + stdin). Steps: `navigate{url}`, `wait{ms}`, `waitReady{timeout}`, `eval{js}`, `click{selector}`, `type{selector,text}`, `scroll{deltaY}`, `text{max}`, `title`, `screenshot{path}` |
+
+## Speed
+
+- Commands connect directly to the page-level DevTools websocket (no browser-level attach round-trip).
+- `navigate` and `waitReady` poll `document.readyState` instead of fixed sleeps.
+- `open` returns once the window is CDP-ready, so callers do not need to guess boot time.
+- `click` auto-scrolls the target into view before clicking (elements below the fold otherwise receive no hit).
+- For multi-step tasks always prefer `run`: it keeps ONE connection and executes steps in a few milliseconds each. Example: open a page, wait, mark + click a like button, verify, screenshot — ~5-6s total including page load.
 
 ## Rules and notes
 
