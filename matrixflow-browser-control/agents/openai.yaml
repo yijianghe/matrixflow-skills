@@ -1,0 +1,4 @@
+interface:
+  display_name: "MatrixFlow Browser Control"
+  short_description: "Control MatrixFlow browser via local API + CDP"
+  default_prompt: "Use $matrixflow-browser-control to open a website in the MatrixFlow browser and complete a web task."
