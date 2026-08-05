@@ -24,7 +24,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const TITLES = ["基础", "美漫", "插图", "涂鸦", "涂写", "清新", "边框", "备忘", "简约", "光影", "手写"];
+const TITLES = ["基础", "美漫", "插图", "涂鸦", "涂写", "清新", "边框", "备忘", "简约", "光影", "手写", "书摘"];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (min, max) => Math.floor(min + Math.random() * Math.max(1, max - min));
 
@@ -103,14 +103,54 @@ async function clickAt(cdp, x, y) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 }
 
-async function centerOf(cdp, expr) {
+async function scrollThenCenter(cdp, expr) {
+  const ok = await evalInPage(cdp, `(() => {
+    const el = ${expr};
+    if (!el) return false;
+    // 手动滚动最近的可滚动祖先使元素居中（scrollIntoView 对深层滚动容器可能失效）
+    let cur = el.parentElement;
+    while (cur && cur !== document.body) {
+      const s = getComputedStyle(cur);
+      if (cur.scrollHeight > cur.clientHeight + 20 && (s.overflowY === "auto" || s.overflowY === "scroll" || s.overflowY === "overlay")) {
+        const er = el.getBoundingClientRect();
+        const cr = cur.getBoundingClientRect();
+        cur.scrollTop = (er.top - cr.top) + cur.scrollTop - cur.clientHeight / 2;
+        break;
+      }
+      cur = cur.parentElement;
+    }
+    el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    return true;
+  })()`);
+  if (!ok) return null;
+  await sleep(400);
   return evalInPage(cdp, `(() => {
     const el = ${expr};
     if (!el) return null;
-    el.scrollIntoView({ block: "center", inline: "center" });
     const r = el.getBoundingClientRect();
-    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    const x = Math.round(r.x + r.width / 2);
+    const y = Math.round(r.y + r.height / 2);
+    if (x <= 0 || y <= 0 || x >= innerWidth || y >= innerHeight) return null;
+    return { x, y };
   })()`);
+}
+
+async function centerOf(cdp, expr) {
+  return scrollThenCenter(cdp, expr);
+}
+
+// 可靠点击：滚动到目标 → 坐标有效（视口内）即点击；失效则重试
+async function clickReliable(cdp, expr, timeoutMs = 6000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const pos = await scrollThenCenter(cdp, expr);
+    if (pos) {
+      await clickAt(cdp, pos.x, pos.y);
+      return true;
+    }
+    await sleep(400);
+  }
+  return false;
 }
 
 async function waitFor(cdp, expr, timeoutMs = 30000, intervalMs = 400) {
@@ -141,6 +181,153 @@ function findLocalImage(imagePath, imageDir) {
   return null;
 }
 
+function parseSchedule(str) {
+  // 支持: "YYYY-MM-DD HH:mm" / "明天 HH:mm" / "后天 HH:mm" / "HH:mm"（今天）
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  let datePart = null;
+  let timePart = null;
+  const m = String(str).trim().match(/^(\d{4}-\d{2}-\d{2})?[\s]?(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  let d = new Date();
+  if (m[1]) {
+    const [y, mo, da] = m[1].split("-").map(Number);
+    d = new Date(y, mo - 1, da);
+  } else if (/^明/.test(str)) {
+    d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  } else if (/^后/.test(str)) {
+    d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
+  } else {
+    d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+  const hh = Number(m[2]);
+  const mm = Number(m[3]);
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
+  if (target.getTime() < now.getTime() + 10 * 60 * 1000) return null; // 至少10分钟后
+  return {
+    dateStr: `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}`,
+    y: target.getFullYear(),
+    mo: target.getMonth() + 1,
+    day: target.getDate(),
+    hh: pad(hh),
+    mm: pad(mm),
+  };
+}
+
+async function setSchedule(cdp, scheduleStr, stamp) {
+  const t = parseSchedule(scheduleStr);
+  if (!t) {
+    console.error("定时时间不合法（需未来10分钟后，格式 YYYY-MM-DD HH:mm）");
+    return false;
+  }
+  // 1) 打开定时开关：循环点击直到日期框出现（不管残留状态，总会翻到"开"）
+  let dpReady = false;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const hasDp = await evalInPage(cdp, `!!document.querySelector('.post-time-wrapper .d-datepicker')`);
+    if (hasDp) { dpReady = true; break; }
+    // 必须点滑块（d-switch 40x24），点卡片文字区无效
+    await clickReliable(cdp, `document.querySelector('.post-time-wrapper .d-switch, .post-time-wrapper .custom-switch-switch')`);
+    await sleep(700);
+  }
+  stamp("定时开关打开：" + dpReady);
+  if (!dpReady) return false;
+  // 2) 打开日期时间面板
+  const dpClicked = await clickReliable(cdp, `document.querySelector('.post-time-wrapper .d-datepicker')`);
+  stamp("定时日期框点击：" + dpClicked);
+  if (!dpClicked) return false;
+  const panelOpened = await waitFor(cdp, `!!document.querySelector('.d-datepicker-body')`, 5000, 300);
+  stamp("定时面板打开：" + !!panelOpened);
+  if (!panelOpened) return false;
+  // 3) 若目标日期不是今天：先选日期（点日期后面板自动关闭，时间之后再选）
+  const nowD = new Date();
+  const isToday = t.y === nowD.getFullYear() && t.mo === nowD.getMonth() + 1 && t.day === nowD.getDate();
+  if (!isToday) {
+    const dayExpr = `[...document.querySelectorAll('.d-datepicker-dates .d-datepicker-cell')].filter((c) => {
+      const r = c.getBoundingClientRect();
+      return r.width > 10 && r.height > 10 && (c.textContent || '').trim() === ${JSON.stringify(String(t.day))} && !/disabled/.test(String(c.className || ''));
+    })[0]`;
+    const dayClicked = await clickReliable(cdp, dayExpr);
+    stamp("日期选择：" + dayClicked);
+    if (!dayClicked) {
+      console.error(`目标日期 ${t.dateStr} 不在当前月份面板，请选择本月内的日期`);
+      return false;
+    }
+    await sleep(500);
+    // 面板已关，重开（日期保留）
+    await clickReliable(cdp, `document.querySelector('.post-time-wrapper .d-datepicker')`);
+    await waitFor(cdp, `!!document.querySelector('.d-datepicker-body')`, 4000, 300);
+  }
+  // 4-6) 选小时 + 分钟（用 wheel 滚动到容器中央 + 命中验证点击），验证显示值
+  const pickTime = async (value, isMinute) => {
+    const xCond = isMinute ? "> 1060" : "< 1060";
+    for (let i = 0; i < 25; i++) {
+      const st = await evalInPage(cdp, `(() => {
+        const bar = [...document.querySelectorAll('.d-timepicker-timebar')].find((b) => b.getBoundingClientRect().x ${xCond});
+        if (!bar) return null;
+        const el = [...bar.querySelectorAll('*')].find((e) => e.children.length === 0 && (e.textContent || '').trim() === ${JSON.stringify(value)});
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const br = bar.getBoundingClientRect();
+        return JSON.stringify({ top: Math.round(r.top), x: Math.round(r.x + r.width / 2), y: Math.round(r.top + r.height / 2), barTop: Math.round(br.top), barBottom: Math.round(br.bottom), cx: Math.round(br.x + br.width / 2), cy: Math.round(br.y + br.height / 2) });
+      })()`);
+      if (!st) return false;
+      const s = JSON.parse(st);
+      const inView = s.top >= s.barTop && s.top <= s.barBottom - 20;
+      if (inView) {
+        const hitTxt = await evalInPage(cdp, `(() => { const h = document.elementFromPoint(${s.x}, ${s.y}); return h ? (h.textContent || '').trim().slice(0, 6) : ''; })()`);
+        if (hitTxt === value) {
+          await clickAt(cdp, s.x, s.y);
+          return true;
+        }
+      }
+      // 把 wheel 事件直接分发到分钟/小时列容器自身（只滚它，不会误滚外层日期）
+      for (const dir of [s.top < s.barTop ? 240 : -240, s.top < s.barTop ? -240 : 240]) {
+        await evalInPage(cdp, `(() => {
+          const bar = [...document.querySelectorAll('.d-timepicker-timebar')].find((b) => b.getBoundingClientRect().x ${xCond});
+          if (!bar) return false;
+          const br = bar.getBoundingClientRect();
+          bar.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: ${dir},
+            clientX: br.x + br.width / 2,
+            clientY: br.y + br.height / 2,
+            bubbles: true,
+            cancelable: true,
+            view: window
+          }));
+          return true;
+        })()`);
+        await sleep(250);
+      }
+    }
+    return false;
+  };
+  const readVal = () => evalInPage(cdp, `(() => {
+    const p = document.querySelector('.d-datepicker-input-filter, .post-time-wrapper .d-datepicker-content, .post-time-wrapper');
+    return p ? (p.textContent || '').trim().slice(0, 30) : null;
+  })()`);
+  const panelOpen = await evalInPage(cdp, `!!document.querySelector('.d-datepicker-body')`);
+  if (!panelOpen) {
+    await clickReliable(cdp, `document.querySelector('.post-time-wrapper .d-datepicker')`);
+    await waitFor(cdp, `!!document.querySelector('.d-datepicker-body')`, 4000, 300);
+  }
+  await pickTime(t.hh, false);
+  await sleep(300);
+  await pickTime(t.mm, true);
+  await sleep(800);
+  const val = await readVal();
+  stamp("定时显示：" + val);
+  // 分钟选择器在需要滚动时可能点不准：若分钟偏差 ≤3 视为成功，否则警告（仍会定时，分钟用平台默认）
+  const m = val ? String(val).match(/(\d{1,2}):(\d{2})$/) : null;
+  if (m) {
+    const got = Number(m[2]);
+    const want = Number(t.mm);
+    if (Math.abs(got - want) <= 3) return true;
+    console.warn(`[xhs-publish] 定时分钟 ${got} 与目标 ${want} 偏差 >3，已保留平台默认（当前+30分钟）。精确分钟需在发布页人工微调。`);
+    return true;
+  }
+  return !!(val && val.includes(t.dateStr));
+}
+
 async function fillForm(cdp, opt, stamp) {
   const hasForm = await evalInPage(cdp, `!!document.querySelector('input[placeholder*="标题"]')`);
   if (!hasForm) {
@@ -167,22 +354,34 @@ async function fillForm(cdp, opt, stamp) {
     document.execCommand('insertText', false, ${JSON.stringify(opt.body)});
     return (ed.textContent || '').slice(0, 40);
   })()`);
+  // 关闭正文触发的话题建议浮层（会盖住"更多设置"），点标题输入框失焦
+  const titleBox = await scrollThenCenter(cdp, `document.querySelector('input[placeholder*="标题"]')`);
+  if (titleBox) {
+    await clickAt(cdp, titleBox.x, titleBox.y);
+    await sleep(250);
+  }
   stamp("标题+正文已填");
 
   if (opt.visibility !== "公开可见") {
-    const setVisibility = async () => {
-      const perm = await centerOf(cdp, `document.querySelector('.permission-card-select')`);
-      if (!perm) return false;
-      await clickAt(cdp, perm.x, perm.y);
+    let ok = false;
+    for (let attempt = 0; attempt < 5 && !ok; attempt++) {
+      // 先 hover 一下再点击（d-select 有 hover 展开行为）
+      const pos = await scrollThenCenter(cdp, `document.querySelector('.permission-card-select')`);
+      if (pos) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pos.x, y: pos.y });
+        await sleep(500);
+      }
+      await clickReliable(cdp, `document.querySelector('.permission-card-select')`);
+      await sleep(500);
       const o = await waitFor(cdp, `(() => {
         const cands = [...document.querySelectorAll('.group-info .name, [class*="permission"] [class*="option"]')].filter(e => e.children.length === 0 && (e.textContent || '').trim() === ${JSON.stringify(opt.visibility)});
         const vis = cands.find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.x >= 0 && r.x < innerWidth && r.y >= 0 && r.y < innerHeight; });
         if (!vis) return null;
-        vis.scrollIntoView({ block: 'center' });
+        vis.scrollIntoView({ block: 'center', behavior: 'instant' });
         const r = vis.getBoundingClientRect();
         return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
-      })()`, 3000, 200);
-      if (!o) return false;
+      })()`, 2500, 250);
+      if (!o) continue;
       const { x, y } = JSON.parse(o);
       await clickAt(cdp, x, y);
       for (let i = 0; i < 10; i++) {
@@ -192,13 +391,18 @@ async function fillForm(cdp, opt, stamp) {
           const t = p ? (p.textContent || '').trim() : '';
           return t.includes(${JSON.stringify(opt.visibility)});
         })()`);
-        if (matched) return true;
+        if (matched) { ok = true; break; }
       }
-      return false;
-    };
-    let ok = await setVisibility();
-    if (!ok) ok = await setVisibility();
+    }
     stamp("可见范围：" + (ok ? opt.visibility : "设置失败！"));
+    if (!ok && opt.visibility !== "公开可见") {
+      throw new Error("可见范围设置失败，已停止发布（防止误发公开）。请人工检查表单。");
+    }
+  }
+
+  if (opt.schedule) {
+    const ok = await setSchedule(cdp, opt.schedule, stamp);
+    stamp("定时发布：" + (ok ? opt.schedule : "设置失败"));
   }
 
   if (opt.draft) {
@@ -252,6 +456,7 @@ async function main() {
     if (args[i] === "--image") opt.image = args[++i];
     if (args[i] === "--image-dir") opt.imageDir = args[++i];
     if (args[i] === "--draft") opt.draft = true;
+    if (args[i] === "--schedule") opt.schedule = args[++i];
   }
   if (!opt.title || !opt.body) {
     console.error("Missing --title or --body/--body-file");
@@ -441,23 +646,22 @@ async function main() {
     const t = JSON.parse(tpl);
     const beforeSrc = await evalInPage(cdp, `(() => { const i = [...document.querySelectorAll('img')].find(x => x.getBoundingClientRect().width > 200); return i ? (i.currentSrc || i.src) : ''; })()`);
     let tplOk = false;
-    for (let attempt = 0; attempt < 3 && !tplOk; attempt++) {
-      await clickAt(cdp, t.x, t.y);
-      for (let i = 0; i < 10; i++) {
-        await sleep(300);
-        const chk = await evalInPage(cdp, `(() => {
-          const items = [...document.querySelectorAll('.cover-item-container')];
-          const active = items.filter((c) => /active|selected|checked/i.test(String(c.className || '')));
-          if (active.length === 1) {
-            const n = active[0].querySelector('.cover-name');
-            return n ? (n.textContent || '').trim() : null;
-          }
-          const src = (() => { const img = [...document.querySelectorAll('img')].find((x) => x.getBoundingClientRect().width > 200); return img ? (img.currentSrc || img.src) : ''; })();
-          return src && src !== ${JSON.stringify(beforeSrc)} ? '__src_changed' : null;
-        })()`);
-        if (chk === t.name || chk === "__src_changed") { tplOk = true; break; }
-      }
+    await clickAt(cdp, t.x, t.y);
+    for (let i = 0; i < 8; i++) {
+      await sleep(250);
+      const chk = await evalInPage(cdp, `(() => {
+        const items = [...document.querySelectorAll('.cover-item-container')];
+        const active = items.filter((c) => /active|selected|checked/i.test(String(c.className || '')));
+        if (active.length === 1) {
+          const n = active[0].querySelector('.cover-name');
+          return n ? (n.textContent || '').trim() : null;
+        }
+        const src = (() => { const img = [...document.querySelectorAll('img')].find((x) => x.getBoundingClientRect().width > 200); return img ? (img.currentSrc || img.src) : ''; })();
+        return src && src !== ${JSON.stringify(beforeSrc)} ? '__src_changed' : null;
+      })()`);
+      if (chk === t.name || chk === "__src_changed") { tplOk = true; break; }
     }
+    if (!tplOk) await clickAt(cdp, t.x, t.y); // 再点一次兜底，不耗时验证
     stamp(`模板：${t.name}${tplOk ? "（已选中）" : "（未能验证，继续）"}，${((Date.now() - tplStart) / 1000).toFixed(1)}s`);
     await sleep(400);
   }
