@@ -161,9 +161,10 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 
 - **内容生成**：用 `reference` 拉爆款结构（标题/点赞/评论区高频问题）→ 改写种草文案（体验式、不硬广、引导私信）；
 - **封面图（推荐原生文字生成图片，已验证 2026-08-05）**：打开创作平台发布页 → 点击「上传图片，或写文字生成图片」→ 选「文字配图」→ 输入封面文案 → 点「生成图片」→ 平台一次生成多套排版，选「基础」→ 点「下一步」直接带入发布表单。全程不需要本地素材/占位图。详见 `references/xhs-publish-native-text-to-image.md`；
-- **表单自动填充（已验证可行）**：标题用 `input[placeholder*="标题"]`（触发 input/change），正文用 `.tiptap.ProseMirror` + `document.execCommand('insertText', ...)`（换行自动成段落），话题直接写在正文末尾（`#话题`）；
+- **表单自动填充（已验证可行）**：标题用 `input[placeholder*="标题"]`（触发 input/change），**标题必须 ≤20 字**（超长会被拦截）；正文用 `.tiptap.ProseMirror` + `document.execCommand('insertText', ...)`（换行自动成段落），话题直接写在正文末尾（`#话题`）；
 - **可见范围**：在「更多设置」里点「公开可见」下拉 → 选「仅自己可见」（下拉必须用 CDP 真实鼠标坐标点击，`element.click()` 无效）；
-- **发布按钮（已攻克 shadow DOM）**：新版创作页的发布条是自定义元素 `xhs-publish-btn`，按钮在内部 shadow DOM，通过 `document.querySelector('xhs-publish-btn')._sr.querySelector('button.bg-red')` 拿到红色「发布」按钮并点击。发布成功会跳回 `creator.xiaohongshu.com/new/home`。
+- **发布按钮（已攻克 shadow DOM）**：新版创作页的发布条是自定义元素 `xhs-publish-btn`，按钮在内部 shadow DOM，通过 `document.querySelector('xhs-publish-btn')._sr.querySelector('button.bg-red')` 拿到红色「发布」按钮并点击。发布成功标志：发布页 URL 出现 `published=true`，然后到「笔记管理 → 仅自己可见」里确认。
+- **提速要点**：全程一条 CDP 连接；「生成图片」若 `click()` 不触发，改用 CDP 真实鼠标点击；首页「最新笔记」有延迟，验证以「笔记管理」为准。
 
 注意：**新创建的环境没有平台登录态**（会显示“登录后查看”），先用已登录的环境（或让用户在新环境里扫码登录），再执行以上脚本；发布评论前务必让用户确认话术内容。
 
