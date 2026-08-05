@@ -132,6 +132,14 @@ submit.click();
 5. 实测（2026-08-05 第二次发布）：页面若停在上传视频模式，先切「上传图文」；
    「生成图片」按钮用 `element.click()` 有时不触发，改用 CDP 真实鼠标点击
    （先 scrollIntoView 取中心坐标，再 Input.dispatchMouseEvent）几乎秒触发。
+6. 实测（2026-08-05 第三次发布，商K行业）补充两个坑：
+   - 打开发布页后可能停在「上传视频」模式（正文区出现"拖拽视频到此"），
+     必须先点顶部「上传图文」标签切换；注意 DOM 里存在**多个同名"上传图文"叶子**
+     （含隐藏副本，坐标是负数），必须过滤 `getBoundingClientRect()` 在视口内
+     （x/y ≥ 0 且 < innerWidth/innerHeight）的可见元素再点；
+   - 「生成图片」完成后页面布局会变（`.card-editor-container` 消失、出现
+     `zeusengine-gpu-server` 图片），轮询不要只盯旧选择器，改判断
+     "任意宽 > 200px 的 img 存在 + 生成按钮消失"即视为成功，再点「下一步」。
 
 ## 四、常见坑
 
