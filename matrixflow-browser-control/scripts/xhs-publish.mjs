@@ -185,23 +185,30 @@ function parseSchedule(str) {
   // 支持: "YYYY-MM-DD HH:mm" / "明天 HH:mm" / "后天 HH:mm" / "HH:mm"（今天）
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
-  let datePart = null;
-  let timePart = null;
-  const m = String(str).trim().match(/^(\d{4}-\d{2}-\d{2})?[\s]?(\d{1,2}):(\d{2})$/);
+  const s = String(str).trim();
+  let m;
+  let dayOffset = 0;
+  if (/^明天/.test(s)) {
+    dayOffset = 1;
+    m = s.match(/(\d{1,2}):(\d{2})$/);
+  } else if (/^后天/.test(s)) {
+    dayOffset = 2;
+    m = s.match(/(\d{1,2}):(\d{2})$/);
+  } else {
+    m = s.match(/^(\d{4}-\d{2}-\d{2})?[\s]?(\d{1,2}):(\d{2})$/);
+  }
   if (!m) return null;
   let d = new Date();
-  if (m[1]) {
+  if (dayOffset > 0) {
+    d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset);
+  } else if (m[1]) {
     const [y, mo, da] = m[1].split("-").map(Number);
     d = new Date(y, mo - 1, da);
-  } else if (/^明/.test(str)) {
-    d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  } else if (/^后/.test(str)) {
-    d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
   } else {
     d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   }
-  const hh = Number(m[2]);
-  const mm = Number(m[3]);
+  const hh = Number(dayOffset > 0 ? m[1] : m[2]);
+  const mm = Number(dayOffset > 0 ? m[2] : m[3]);
   const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
   if (target.getTime() < now.getTime() + 10 * 60 * 1000) return null; // 至少10分钟后
   return {
@@ -225,6 +232,18 @@ async function setSchedule(cdp, scheduleStr, stamp) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const hasDp = await evalInPage(cdp, `!!document.querySelector('.post-time-wrapper .d-datepicker')`);
     if (hasDp) { dpReady = true; break; }
+    // 定时发布按钮在页面下方：先把「更多设置」区域滚到内部滚动容器中央
+    await evalInPage(cdp, `(() => {
+      const sc = document.querySelector('.publish-page');
+      const wrap = document.querySelector('.post-time-wrapper');
+      if (sc && wrap) {
+        const wr = wrap.getBoundingClientRect();
+        const sr = sc.getBoundingClientRect();
+        sc.scrollTop = (wr.top - sr.top) + sc.scrollTop - sc.clientHeight / 2;
+      }
+      return 'ok';
+    })()`);
+    await sleep(400);
     // 必须点滑块（d-switch 40x24），点卡片文字区无效
     await clickReliable(cdp, `document.querySelector('.post-time-wrapper .d-switch, .post-time-wrapper .custom-switch-switch')`);
     await sleep(700);
@@ -361,6 +380,15 @@ async function fillForm(cdp, opt, stamp) {
     await sleep(250);
   }
   stamp("标题+正文已填");
+  // 话题校验：至少 3 个与内容相关的话题（同城流量需带地域+行业+同行话题）
+  const topicCount = await evalInPage(cdp, `(() => {
+    const ed = document.querySelector('.tiptap.ProseMirror');
+    const t = ed ? (ed.textContent || '') : '';
+    return (t.match(/#[^\\s#]+/g) || []).length;
+  })()`);
+  if (topicCount < 3) {
+    console.warn(`[xhs-publish] 正文话题仅 ${topicCount} 个，建议 ≥3 个且与内容相关；同城流量带「地域+行业+同行爆款话题」。`);
+  }
 
   if (opt.visibility !== "公开可见") {
     let ok = false;
@@ -510,14 +538,26 @@ async function main() {
   await waitFor(cdp, `!!(/上传图文|上传视频/.test(document.body.innerText || '') || document.querySelector('input[placeholder*="标题"]'))`, 40000);
   await sleep(300);
 
-  // 如果已经在发布表单（有标题输入框，封面已就绪）→ 直接进入填表单步骤，省掉封面流程
+  // 如果页面停在残留表单（自动保存的旧草稿）→ 先退出重新开始，避免封面/文案不一致
   const alreadyForm = await evalInPage(cdp, `!!document.querySelector('input[placeholder*="标题"]')`);
   if (alreadyForm) {
-    stamp("检测到已有表单（复用当前封面）");
-    await fillForm(cdp, opt, stamp);
-    cdp.close();
-    console.log(`TOTAL: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    return;
+    stamp("检测到残留表单，先退出重新开始");
+    const back = await centerOf(cdp, `document.querySelector('.publish-page-back-btn')`);
+    if (back) await clickAt(cdp, back.x, back.y);
+    await sleep(1200);
+    const confirm = await evalInPage(cdp, `(() => {
+      const b = [...document.querySelectorAll('button')].find((x) => /放弃|退出|丢弃/.test((x.textContent || '').trim()) && x.getBoundingClientRect().width > 0);
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+    })()`);
+    if (confirm) {
+      const c = JSON.parse(confirm);
+      await clickAt(cdp, c.x, c.y);
+      await sleep(1500);
+    }
+    await waitFor(cdp, `!!/上传图文|上传视频/.test(document.body.innerText || '')`, 10000);
+    stamp("已回到上传模式");
   }
 
   // 若停在「上传视频」模式 → 切「上传图文」（过滤隐藏副本）
