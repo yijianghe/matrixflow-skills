@@ -54,6 +54,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
+const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function resolveUserDataRoot() {
@@ -106,6 +107,19 @@ async function api(pathname, { method = "GET", body } = {}) {
     throw new Error(`API ${method} ${pathname} -> ${res.status}: ${detail}${hint}`);
   }
   return json;
+}
+
+// 判断客户端是否在运行：任何 HTTP 状态码都说明客户端在运行；
+// 只有网络层错误才算“未运行”。兼容不同版本的本地接口（有的版本没有 info 接口）。
+async function probeAppRunning() {
+  try {
+    await api("/api/v1/profiles");
+    return { running: true, status: 200 };
+  } catch (e) {
+    const m = String(e.message).match(/-> (\d{3}):/);
+    if (m) return { running: true, status: Number(m[1]) };
+    return { running: false, status: 0 };
+  }
 }
 
 function findProfileDir(profileId) {
@@ -288,19 +302,16 @@ function readStdin() {
 /* ---------------- single commands ---------------- */
 
 async function cmdStatus() {
+  const probe = await probeAppRunning();
   const info = {
     node: process.version,
     baseUrl: baseUrl(),
     token: resolveToken() ? "present" : "missing",
+    appRunning: probe.running,
+    appHttpStatus: probe.status || undefined,
     userData: resolveUserDataRoot(),
     skillDir: SKILL_DIR,
   };
-  try {
-    const res = await fetch(`${baseUrl()}/api-docs-guide`, { signal: AbortSignal.timeout(3_000) });
-    info.appRunning = res.ok;
-  } catch {
-    info.appRunning = false;
-  }
   console.log(JSON.stringify(info, null, 2));
 }
 
@@ -399,11 +410,13 @@ async function cmdCreate(args) {
   }
   const results = [];
   for (const name of namesList) {
-    const r = await api("/api/v1/profiles", {
-      method: "POST",
-      body: { name, platform, fingerprint: JSON.parse(JSON.stringify(tpl)), ...(proxyId ? { proxyId } : {}) }
+    const created = await createProfile({
+      name,
+      platform,
+      fingerprint: JSON.parse(JSON.stringify(tpl)),
+      ...(proxyId ? { proxyId } : {})
     });
-    results.push({ name, ok: true, id: r.data?.id, proxyId: proxyId || undefined });
+    results.push({ name, ok: true, id: created?.id, proxyId: proxyId || undefined });
   }
   console.log(JSON.stringify(results, null, 2));
 }
@@ -456,6 +469,54 @@ async function resolveCloudToken() {
   }
   // 本机没有 keytar 时，直接用 PowerShell 读取 Windows 凭据管理器里的 MatrixFlow 登录令牌
   return readCloudTokenViaPowerShell();
+}
+
+// 新建环境：优先走本地接口；部分客户端版本本地接口不支持新建，
+// 自动回退到云端接口（需要客户端已登录）。
+async function createProfile(body) {
+  try {
+    const r = await api("/api/v1/profiles", { method: "POST", body });
+    return r.data;
+  } catch (err) {
+    const cloudToken = await resolveCloudToken();
+    if (!cloudToken) {
+      throw new Error(
+        `本地接口不支持新建环境（客户端版本限制），且无法读取云端登录令牌：${err.message}`
+      );
+    }
+    const res = await fetch(`${CLOUD_API_BASE}/profiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cloudToken}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`云端新建环境失败 ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text).data;
+  }
+}
+
+// 删除环境：优先走本地接口；本地不支持时自动回退到云端接口。
+async function deleteProfile(id) {
+  try {
+    const r = await api(`/api/v1/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return r.data;
+  } catch (err) {
+    const cloudToken = await resolveCloudToken();
+    if (!cloudToken) {
+      throw new Error(
+        `本地接口不支持删除环境（客户端版本限制），且无法读取云端登录令牌：${err.message}`
+      );
+    }
+    const res = await fetch(`${CLOUD_API_BASE}/profiles/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cloudToken}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`云端删除环境失败 ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text).data;
+  }
 }
 
 function readCloudTokenViaPowerShell() {
@@ -526,8 +587,8 @@ try {
 
 async function cmdDelete(profile) {
   const id = await resolveProfileId(profile, { allowOffline: true });
-  const r = await api(`/api/v1/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
-  console.log(JSON.stringify({ ok: true, profileId: id, data: r.data }, null, 2));
+  const data = await deleteProfile(id);
+  console.log(JSON.stringify({ ok: true, profileId: id, data }, null, 2));
 }
 
 async function cmdOpenBatch(csv) {
@@ -847,20 +908,21 @@ async function cmdDoctor() {
 
   // 2. MatrixFlow 客户端是否运行
   info.baseUrl = baseUrl();
-  try {
-    const infoRes = await api("/api/v1/matrixflow/local-api/info");
-    info.appRunning = true;
-    lines.push(ok(`MatrixFlow 客户端正在运行（${baseUrl()}）`));
-  } catch (e) {
-    info.appRunning = false;
+  const probe = await probeAppRunning();
+  info.appRunning = probe.running;
+  if (probe.running) {
     lines.push(
-      /API GET \/api\/v1\/matrixflow\/local-api\/info -> 401/.test(e.message)
+      probe.status === 401
         ? warn(
             `MatrixFlow 客户端正在运行，但本地 API 未授权（401）：请打开客户端“设置 → API 文档”核对 Token 是否正确。`
           )
-        : fail(
-            `MatrixFlow 客户端未运行或本地 API 不可达（${baseUrl()}）：请先打开 MatrixFlow 应用，并确认“设置 → API”已开启。`
-          )
+        : ok(`MatrixFlow 客户端正在运行（${baseUrl()}）`)
+    );
+  } else {
+    lines.push(
+      fail(
+        `MatrixFlow 客户端未运行或本地 API 不可达（${baseUrl()}）：请先打开 MatrixFlow 应用，并确认“设置 → API”已开启。`
+      )
     );
   }
 
@@ -914,7 +976,7 @@ async function cmdDoctor() {
     cloudToken
       ? ok("云端登录令牌可读取（create --proxy 可用）")
       : warn(
-          "云端登录令牌未找到：给新窗口绑定代理（create --proxy）需要客户端已登录，Windows 凭据管理器中应有 MatrixFlow 登录记录。"
+          "云端登录令牌未找到：新建/删除/绑代理需要客户端已登录，Windows 凭据管理器中应有 MatrixFlow 登录记录。如果确认已登录仍显示未找到，请用管理员身份重新打开终端再运行 doctor（读取系统凭据需要权限）。"
         )
   );
 

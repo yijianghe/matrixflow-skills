@@ -254,6 +254,7 @@ node scripts/mf-browser.mjs workflow-list
 ## 常见问题（FAQ）
 
 **Q: 换新电脑后"创建窗口失败"？** 先运行 `node scripts/mf-browser.mjs doctor`。绝大多数原因是 **MatrixFlow 客户端没登录**——新建/删除/绑代理都要走云端；请先登录账号，再把 `[WARN] 云端账号未登录` 一项跑到 `[PASS]`。首次使用还需要至少一个已存在的环境作为指纹模板。
+**Q: 某些客户端版本本地接口不支持新建/删除窗口？** 脚本已内置云端自动回退（本地接口失败自动改走云端），无需处理；前提是客户端已登录。若 `doctor` 提示云端令牌未找到但已登录，用管理员身份重新打开终端再运行。
 **Q: 换新电脑后提示 401 / Token 缺失？** 在 MatrixFlow 客户端"设置 → API 文档"开启本地 API，把 Token 写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`（或用环境变量 `MF_LOCAL_API_TOKEN`）。
 **Q: 提示 API 不可达？** 先启动 MatrixFlow 应用，再 `status`。
 **Q: Token 缺失？** 应用"设置 → API 文档"复制 Token，或确认 `local-api-token.txt` 存在。
@@ -265,7 +266,7 @@ node scripts/mf-browser.mjs workflow-list
 
 ## 更新日志
 
-- **2026-08-06**：新增 `doctor` 环境自检命令（新电脑部署第一步）；创建窗口失败原因定位（未登录/无指纹模板/Token 缺失）；云端令牌改为 PowerShell 读取 Windows 凭据管理器，任何机器无需 keytar。
+- **2026-08-06**：新增 `doctor` 环境自检命令（新电脑部署第一步）；创建窗口失败原因定位（未登录/无指纹模板/Token 缺失）；云端令牌改为 PowerShell 读取 Windows 凭据管理器，任何机器无需 keytar；运行检测兼容不同客户端版本；新建/删除环境自动云端回退。
 - **2026-08-06**：发笔记规则强化——默认私密立即发布；话题 ≥3 强制；文案永不重复（历史库双拦截）；定时至少 1 小时；同城 SEO 话题公式；100+ 行业速查库；私信 inbox 命令；评论二级/三级展开。
 - **2026-08-05**：xhs-publish.mjs 快速发布（文字转图片+随机模板+定时）；养号循环 v2（只滚详情容器/30-45s/概率互动）；全行业 SOP 框架。
 
