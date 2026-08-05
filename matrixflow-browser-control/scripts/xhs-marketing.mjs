@@ -12,6 +12,7 @@
  *   node scripts/xhs-marketing.mjs <profileSpec> reply <关键词> --to <评论片段> --comment <回复话术> [--title <标题片段>]
  *   node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top N              爆改参考：收集爆款结构+评论区高频问题
  *   node scripts/xhs-marketing.mjs <profileSpec> full <关键词...> --comment <种草话术> [--notes N] [--top N]
+ *   node scripts/xhs-marketing.mjs <profileSpec> inbox                                 打开网页版消息页，读未读私信/会话
  *
  * 动作：
  *   tag        打标签：搜索关键词并逐篇浏览（训练推荐算法）
@@ -21,6 +22,7 @@
  *   scan       截流扫描：找同行笔记，读评论区，标记求地址/求推荐/问价格等意向客户
  *   reply      评论区回复截留：给目标评论种草式回复
  *   reference  爆改参考：收集爆款标题/点赞/评论区问题，供改写发布
+ *   inbox      私信：打开网页版消息页，输出会话/未读私信文本（回复私信用 mf-browser click/type 操作）
  */
 
 import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
@@ -397,6 +399,28 @@ async function collectComments(cdp) {
   return raw ? JSON.parse(raw) : [];
 }
 
+// 展开二级/三级评论（点"展开N条回复"和嵌套"查看回复"），让 scan 能读到更深层的意向评论
+async function expandReplies(cdp) {
+  for (let i = 0; i < 8; i++) {
+    const clicked = await ev(
+      cdp,
+      `(() => {
+        const btns = [...document.querySelectorAll('.show-more, [class*="show-more"], [class*="view-replies"], [class*="reply"] [class*="more"]')].filter((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.x >= 0 && r.x < innerWidth && r.y >= 0 && r.y < innerHeight;
+        });
+        if (!btns.length) return false;
+        const b = btns[Math.floor(Math.random() * btns.length)];
+        b.scrollIntoView({ block: 'center', behavior: 'instant' });
+        b.click();
+        return true;
+      })()`
+    );
+    if (!clicked) break;
+    await sleep(800);
+  }
+}
+
 function classifyIntent(text) {
   const t = String(text || "").trim();
   // 只把“像提问”的评论当意向客户，减少把建议/分享误判为客户
@@ -575,6 +599,7 @@ async function main() {
           if (!card.href) continue;
           const res = await openCardAndFollow(cdp, port, card.title);
           if (!res) continue;
+          await expandReplies(res.cdp);
           const comments = await collectComments(res.cdp);
           const leads = [];
           for (const c of comments) {
@@ -667,6 +692,13 @@ async function main() {
         }
         log.push({ keyword: kw, notes });
       }
+    } else if (action === "inbox") {
+      // 打开网页版消息页，读取会话/未读私信文本（供 agent 决策后回复）
+      await ev(cdp, `location.href = 'https://www.xiaohongshu.com/chat?channel_type=message_pc_page'`);
+      await waitReady(cdp, 25_000);
+      await sleep(4000);
+      const text = await ev(cdp, `(document.body.innerText || '').slice(0, 4000)`);
+      log.push({ inbox: (text || "").slice(0, 2000) });
     } else {
       throw new Error(`未知动作: ${action}`);
     }

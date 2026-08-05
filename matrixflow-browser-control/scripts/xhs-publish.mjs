@@ -273,7 +273,7 @@ function parseSchedule(str) {
   const hh = Number(dayOffset > 0 ? m[1] : m[2]);
   const mm = Number(dayOffset > 0 ? m[2] : m[3]);
   const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
-  if (target.getTime() < now.getTime() + 10 * 60 * 1000) return null; // 至少10分钟后
+  if (target.getTime() < now.getTime() + 60 * 60 * 1000) return null; // 平台要求定时至少1小时后
   return {
     dateStr: `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}`,
     y: target.getFullYear(),
@@ -287,7 +287,7 @@ function parseSchedule(str) {
 async function setSchedule(cdp, scheduleStr, stamp) {
   const t = parseSchedule(scheduleStr);
   if (!t) {
-    console.error("定时时间不合法（需未来10分钟后，格式 YYYY-MM-DD HH:mm）");
+    console.error("定时时间不合法：平台要求至少1小时后才能定时发布（格式 YYYY-MM-DD HH:mm / 明天 HH:mm / 后天 HH:mm）");
     return false;
   }
   // 1) 打开定时开关：循环点击直到日期框出现（不管残留状态，总会翻到"开"）
@@ -450,7 +450,7 @@ async function fillForm(cdp, opt, stamp) {
     return (t.match(/#[^\\s#]+/g) || []).length;
   })()`);
   if (topicCount < 3) {
-    console.warn(`[xhs-publish] 正文话题仅 ${topicCount} 个，建议 ≥3 个且与内容相关；同城流量带「地域+行业+同行爆款话题」。`);
+    throw new Error(`正文话题仅 ${topicCount} 个，必须 ≥3 个且与内容相关才能发布（同城流量带「地域+行业+场景+同行话题」）。请在正文补足话题后重发。`);
   }
   // 无关话题拦截：话题必须与内容相关（地域/行业/场景/痛点），禁止测试类通用词
   const badTopics = await evalInPage(cdp, `(() => {
