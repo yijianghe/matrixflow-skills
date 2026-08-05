@@ -94,8 +94,21 @@ echo '[{"op":"navigate","url":"https://example.com"},{"op":"waitReady"},{"op":"e
 
 `scripts/human-browse.mjs` 模拟真人浏览信息流：打开每篇笔记、切换图片、滚动评论区、随机人味节奏、给指定笔记点赞。支持“新标签页打开”的网站（跟随新标签→操作→关闭→回到列表）和“同标签跳转”的网站（返回上一页）。
 
+**发现页养号循环（完整版，复刻用户 Automa 脚本，2026-08-05 验证通过）**：`scripts/xhs-feed-browse.mjs`
+
+每篇笔记强制完整执行（不是“打开就结束”）：
+1. 发现页随机选未浏览卡片，真实鼠标点击打开；
+2. 检测笔记类型：视频 / 多图（1/N 页码）/ 单图；
+3. 滚正文 2-4 次（随机间隔 0.9-1.7 秒）；
+4. 多图笔记切图 0-3 次，每次用快照对比验证图片确实切换；
+5. 滚评论区 3-5 次：优先从右侧坐标找滚动容器，分步滚动并触发 scroll 事件，验证生效；
+6. 差异化停留 5-9 秒；
+7. 按概率随机点赞（检查 `like-active`，已赞就不再点，防止取消）；
+8. 关闭笔记（`.close-circle` 等）→ 滚动发现页 650px → 下一篇。
+
 ```bash
 node scripts/human-browse.mjs <profileSpec> <feedUrl> --notes 5 --like 3
+node scripts/xhs-feed-browse.mjs <profileSpec> --rounds 6
 ```
 
 - `--notes N` — 浏览几篇笔记（默认 5）
