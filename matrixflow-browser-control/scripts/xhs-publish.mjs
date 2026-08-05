@@ -389,6 +389,16 @@ async function fillForm(cdp, opt, stamp) {
   if (topicCount < 3) {
     console.warn(`[xhs-publish] 正文话题仅 ${topicCount} 个，建议 ≥3 个且与内容相关；同城流量带「地域+行业+同行爆款话题」。`);
   }
+  // 无关话题拦截：话题必须与内容相关（地域/行业/场景/痛点），禁止测试类通用词
+  const badTopics = await evalInPage(cdp, `(() => {
+    const ed = document.querySelector('.tiptap.ProseMirror');
+    const t = ed ? (ed.textContent || '') : '';
+    const tops = t.match(/#([^\\s#]+)/g) || [];
+    return tops.filter((x) => /测试|定时发布|随便|无题|暂无/.test(x));
+  })()`);
+  if (badTopics && badTopics.length) {
+    throw new Error(`正文含与内容无关的话题：${badTopics.join(" ")}。话题必须从标题/正文提炼（地域词+行业词+场景词），请修正后重发。`);
+  }
 
   if (opt.visibility !== "公开可见") {
     let ok = false;
