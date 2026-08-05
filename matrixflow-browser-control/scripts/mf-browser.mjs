@@ -48,6 +48,7 @@ import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -97,7 +98,12 @@ async function api(pathname, { method = "GET", body } = {}) {
     json = await res.json();
   } catch {}
   if (!res.ok) {
-    throw new Error(`API ${method} ${pathname} -> ${res.status}: ${json?.error?.message || res.statusText}`);
+    const detail = json?.error?.message || res.statusText;
+    const hint =
+      res.status === 401
+        ? "（本地 API 未授权：请打开 MatrixFlow 客户端，进入“设置 → API 文档”开启本地 API，并把 Token 写入 userData/local-api-token.txt 或用环境变量 MF_LOCAL_API_TOKEN）"
+        : "";
+    throw new Error(`API ${method} ${pathname} -> ${res.status}: ${detail}${hint}`);
   }
   return json;
 }
@@ -349,8 +355,22 @@ async function cmdCreate(args) {
   }
   const full = await api("/api/v1/profiles");
   const items = full.data?.items || full.data || [];
+  if (full.meta?.source === "running-only" || items.length === 0) {
+    if (full.meta?.source === "running-only") {
+      throw new Error(
+        "无法新建环境：MatrixFlow 客户端未登录（或云端账号不可用）。请先打开客户端登录账号，再重试 create；可先运行 doctor 自检确认。"
+      );
+    }
+    throw new Error(
+      "没有可用指纹模板：请先在 MatrixFlow 客户端里手动创建一个环境，之后脚本才能克隆指纹批量新建。"
+    );
+  }
   const tpl = items[0]?.fingerprint;
-  if (!tpl) throw new Error("没有可用指纹模板：请先在应用里创建至少一个环境");
+  if (!tpl) {
+    throw new Error(
+      "没有可用指纹模板：请先在 MatrixFlow 客户端里手动创建一个环境（当前列表来自云端但缺少指纹数据）。"
+    );
+  }
   let proxyId = "";
   if (proxySpec) {
     proxyId = await createCloudProxy(proxySpec);
@@ -424,7 +444,6 @@ async function resolveCloudToken() {
   const require = createRequire(import.meta.url);
   const candidates = [
     join(SKILL_DIR, "node_modules", "keytar"),
-    "D:/zhiwenliulanqi/zhiwenliulanqi/MatrixFlow-analysis/extracted/node_modules/keytar",
     join(process.env.LOCALAPPDATA || "", "@matrixflow", "desktop", "node_modules", "keytar"),
     join(dirname(process.execPath), "resources", "app", "node_modules", "keytar")
   ];
@@ -435,6 +454,73 @@ async function resolveCloudToken() {
       if (v) return v;
     } catch {}
   }
+  // 本机没有 keytar 时，直接用 PowerShell 读取 Windows 凭据管理器里的 MatrixFlow 登录令牌
+  return readCloudTokenViaPowerShell();
+}
+
+function readCloudTokenViaPowerShell() {
+  if (process.platform !== "win32") return "";
+  try {
+    const script = String.raw`
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class MfCred {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct CREDENTIAL {
+    public uint Flags;
+    public int Type;
+    public IntPtr TargetName;
+    public IntPtr Comment;
+    public long LastWritten;
+    public uint CredentialBlobSize;
+    public IntPtr CredentialBlob;
+    public uint Persist;
+    public uint AttributeCount;
+    public IntPtr Attributes;
+    public IntPtr TargetAlias;
+    public IntPtr UserName;
+  }
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool CredRead(string TargetName, int Type, int Flags, out IntPtr Credential);
+  [DllImport("advapi32.dll")]
+  public static extern void CredFree(IntPtr Buffer);
+}
+'@;
+$ptr = [IntPtr]::Zero;
+$ok = [MfCred]::CredRead('MatrixFlow/matrixflow-auth:accessToken', 1, 0, [ref]$ptr);
+if (-not $ok) { exit 0 }
+try {
+  $cred = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [type][MfCred+CREDENTIAL]);
+  if ($cred.CredentialBlobSize -gt 0) {
+    $blob = New-Object byte[] $cred.CredentialBlobSize;
+    [Runtime.InteropServices.Marshal]::Copy($cred.CredentialBlob, $blob, 0, $cred.CredentialBlobSize);
+    $cands = @(
+      [System.Text.Encoding]::UTF8.GetString($blob),
+      [System.Text.Encoding]::Unicode.GetString($blob)
+    );
+    foreach ($secret in $cands) {
+      if ($secret -match '^[\x20-\x7E]+$' -and $secret.Length -ge 8) {
+        Write-Output ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($secret)));
+        break;
+      }
+    }
+  }
+} finally { [MfCred]::CredFree($ptr) }
+`;
+    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      encoding: "utf8",
+      timeout: 20_000,
+      windowsHide: true
+    });
+    if (r.status === 0 && r.stdout) {
+      const b64 = r.stdout.trim().split(/\r?\n/).filter(Boolean).pop() || "";
+      if (b64) {
+        const v = Buffer.from(b64, "base64").toString("utf8").trim();
+        if (v) return v;
+      }
+    }
+  } catch {}
   return "";
 }
 
@@ -740,6 +826,110 @@ async function cmdRun(profile, stepsJson) {
   console.log(JSON.stringify(results, null, 2));
 }
 
+/* ---------------- environment doctor ---------------- */
+
+async function cmdDoctor() {
+  const lines = [];
+  const ok = (x) => `[PASS] ${x}`;
+  const warn = (x) => `[WARN] ${x}`;
+  const fail = (x) => `[FAIL] ${x}`;
+  const note = (x) => `[INFO] ${x}`;
+  const info = {};
+
+  // 1. Node.js 版本
+  const major = Number.parseInt(process.versions.node.split(".")[0], 10);
+  info.node = process.version;
+  lines.push(
+    major >= 22
+      ? ok(`Node.js ${process.version}（满足 >=22 要求）`)
+      : fail(`Node.js ${process.version} 过低：请安装 Node.js 22+（https://nodejs.org）`)
+  );
+
+  // 2. MatrixFlow 客户端是否运行
+  info.baseUrl = baseUrl();
+  try {
+    const infoRes = await api("/api/v1/matrixflow/local-api/info");
+    info.appRunning = true;
+    lines.push(ok(`MatrixFlow 客户端正在运行（${baseUrl()}）`));
+  } catch (e) {
+    info.appRunning = false;
+    lines.push(
+      /API GET \/api\/v1\/matrixflow\/local-api\/info -> 401/.test(e.message)
+        ? warn(
+            `MatrixFlow 客户端正在运行，但本地 API 未授权（401）：请打开客户端“设置 → API 文档”核对 Token 是否正确。`
+          )
+        : fail(
+            `MatrixFlow 客户端未运行或本地 API 不可达（${baseUrl()}）：请先打开 MatrixFlow 应用，并确认“设置 → API”已开启。`
+          )
+    );
+  }
+
+  // 3. 本地 API Token
+  const token = resolveToken();
+  info.token = token ? "present" : "missing";
+  lines.push(
+    token
+      ? ok("本地 API Token 已配置（local-api-token.txt 或 MF_LOCAL_API_TOKEN）")
+      : warn(
+          "本地 API Token 未配置：部分接口可能返回 401。请在 MatrixFlow 设置 → API 文档中开启本地 API，并把 Token 写入 userData/local-api-token.txt，或用环境变量 MF_LOCAL_API_TOKEN。"
+        )
+  );
+
+  // 4. 环境列表 & 云端登录状态
+  let profileCount = 0;
+  let runningCount = 0;
+  let cloudSource = false;
+  try {
+    const full = await api("/api/v1/profiles");
+    const items = full.data || [];
+    profileCount = items.length;
+    cloudSource = full.meta?.source !== "running-only";
+    lines.push(
+      cloudSource
+        ? ok(`云端账号已登录，环境列表来自云端（共 ${profileCount} 个环境）`)
+        : warn(
+            "云端账号未登录或不可用（当前只能看到运行中的窗口）。新建/删除环境都需要登录：请打开 MatrixFlow 客户端登录账号后重试。"
+          )
+    );
+  } catch (e) {
+    lines.push(warn(`读取环境列表失败：${e.message}`));
+  }
+  try {
+    const running = await api("/api/v1/profiles/running");
+    runningCount = (running.data || []).length;
+    lines.push(
+      runningCount > 0
+        ? ok(`当前有 ${runningCount} 个窗口在运行`)
+        : note("当前没有窗口在运行（打开窗口用 open <窗口ID|名称>）")
+    );
+  } catch {}
+  info.profileCount = profileCount;
+  info.runningCount = runningCount;
+  info.cloudSource = cloudSource;
+
+  // 5. 云端登录令牌（绑定代理创建环境需要）
+  const cloudToken = await resolveCloudToken();
+  info.cloudToken = cloudToken ? "present" : "missing";
+  lines.push(
+    cloudToken
+      ? ok("云端登录令牌可读取（create --proxy 可用）")
+      : warn(
+          "云端登录令牌未找到：给新窗口绑定代理（create --proxy）需要客户端已登录，Windows 凭据管理器中应有 MatrixFlow 登录记录。"
+        )
+  );
+
+  // 6. 指纹模板
+  if (profileCount === 0) {
+    lines.push(
+      warn(
+        "当前没有任何环境：首次使用请先在 MatrixFlow 客户端里手动创建一个环境，之后脚本才能克隆指纹批量新建。"
+      )
+    );
+  }
+
+  console.log([...lines, "", "环境信息:", JSON.stringify(info, null, 2)].join("\n"));
+}
+
 /* ---------------- main ---------------- */
 
 async function main() {
@@ -753,6 +943,7 @@ async function main() {
         "MatrixFlow Browser Control (speed-optimized)",
         "Commands:",
         "  status                                    show app/token/userData status",
+        "  doctor                                    full environment self-check (new machine first!)",
         "  list                                      list running environments (windows)",
         "  open <profileId|name> [url ...]            open an environment (waits until CDP-ready)",
         "  open-batch <id1,id2,...>                   open many environments concurrently (3 at a time)",
@@ -781,6 +972,7 @@ async function main() {
   }
   switch (command) {
     case "status": return await cmdStatus();
+    case "doctor": return await cmdDoctor();
     case "list": return await cmdList();
     case "open": return await cmdOpen(args);
     case "open-batch": return await cmdOpenBatch(args[0]);

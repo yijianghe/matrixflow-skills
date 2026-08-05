@@ -10,12 +10,14 @@ description: '控制 MatrixFlow 指纹浏览器（窗口=环境）：打开/关�
 ## 前置条件
 
 - MatrixFlow 桌面应用正在运行（如果 `status` 显示 API 不可达，先启动应用）。
+- MatrixFlow 客户端已**登录账号**（新建/删除环境、绑定代理都要走云端，未登录会失败）。
 - Node.js >= 22（脚本只使用内置的 `fetch` + `WebSocket`，无任何 npm 依赖）。
 - 脚本：`scripts/mf-browser.mjs`（用 `node` 运行）。
 
 ## 快速开始
 
 ```bash
+node scripts/mf-browser.mjs doctor           # 新电脑第一步：环境自检（每个 [FAIL]/[WARN] 都有解决指引）
 node scripts/mf-browser.mjs status          # 确认应用在运行 + Token 正常
 node scripts/mf-browser.mjs list            # 列出运行中的环境（窗口）
 node scripts/mf-browser.mjs open <id|name>  # 打开一个环境窗口
@@ -24,6 +26,24 @@ node scripts/mf-browser.mjs text <id|name>
 ```
 
 先运行 `status`：它会输出 API 地址、应用是否在运行、Token 是否存在。如果应用没在运行，先启动 MatrixFlow，再重新检查。
+
+## 新电脑部署（换机器必看）
+
+换一台电脑装好技能后，**第一步先运行 `doctor` 自检**，它会逐项检查并直接告诉你缺什么：
+
+```bash
+node scripts/mf-browser.mjs doctor
+```
+
+常见情况与处理：
+
+1. **`[FAIL] MatrixFlow 客户端未运行`**：先打开 MatrixFlow 应用，确认“设置 → API”已开启。
+2. **`[WARN] 本地 API Token 未配置`**：MatrixFlow 设置 → API 文档里能看到本地 API Token，把 Token 内容写入 `userData/local-api-token.txt`（即 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`），或用环境变量 `MF_LOCAL_API_TOKEN`。
+3. **`[WARN] 云端账号未登录`**：新建/删除环境、绑定代理必须走云端。请打开 MatrixFlow 客户端**登录你的账号**，再重新运行 `doctor`，直到该项变为 `[PASS]`。
+4. **`[WARN] 当前没有任何环境`**：首次使用请先在客户端里手动创建一个环境，之后 `create` 才能克隆指纹批量新建。
+5. **`[FAIL] Node.js 版本过低`**：安装 Node.js 22+（https://nodejs.org），装完重新打开终端再试。
+
+> 在别的电脑上“创建窗口失败”绝大多数是第 3 条：**客户端没登录**。`create` 是走云端新建的（本地接口只是透传），必须登录后才能用。
 
 ## 工作流程
 
@@ -37,6 +57,7 @@ node scripts/mf-browser.mjs text <id|name>
 
 | 命令 | 作用 |
 | --- | --- |
+| `doctor` | 完整环境自检：Node/应用/Token/登录状态/指纹模板，逐项给出修复指引（新电脑先跑） |
 | `status` | 显示应用状态、API 地址、Token、userData 路径 |
 | `list` | 列出运行中的环境（profileId、状态、url） |
 | `open <id\|name> [url ...]` | 打开环境窗口（可带启动网址），等待就绪后返回 |

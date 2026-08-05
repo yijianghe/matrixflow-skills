@@ -164,10 +164,22 @@ git clone https://github.com/yijianghe/matrixflow-skills.git ~/.codex/skills/mat
 
 ```bash
 cd matrixflow-browser-control/scripts
+node mf-browser.mjs doctor          # 新电脑第一步：环境自检，每一项 FAIL/WARN 都带修复指引
 node mf-browser.mjs status          # 应用在运行？
 node mf-browser.mjs list            # 能看到你的窗口？
 node mf-browser.mjs open <窗口ID> https://www.xiaohongshu.com   # 打开小红书
 ```
+
+### 4.5 换新电脑特别说明（重要）
+
+在**另一台电脑**上装好技能后，先跑 `doctor` 自检，按提示逐项处理：
+
+1. **客户端未登录**（最常见）：新建/删除窗口、绑定代理都要走云端。打开 MatrixFlow 客户端 → 登录你的账号 → 重新 `doctor`，直到"云端账号已登录"显示 `[PASS]`。
+2. **本地 API Token 未配置**：客户端"设置 → API 文档"里开启本地 API，把 Token 写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`，或用环境变量 `MF_LOCAL_API_TOKEN`。
+3. **当前没有任何环境**：首次使用先在客户端手动创建一个窗口，之后 `create` 才能克隆指纹批量新建。
+4. **Node.js 版本过低**：装 Node.js 22+。
+
+> 常见误区：在别的电脑上直接执行 `create` 失败，不是脚本坏了，而是**客户端没登录或没有指纹模板**。先 `doctor` 再操作。
 
 ---
 
@@ -258,7 +270,9 @@ node scripts/xhs-marketing.mjs <窗口ID> inbox
 ## 常见问题（FAQ）
 
 **Q: DeepSeek 直连报 400/404？** Codex 用 Responses API，DeepSeek 只有 Chat API，必须用官方一键脚本或本地代理（见第二部分）。
+**Q: 换新电脑后"创建窗口失败"？** 先运行 `node scripts/mf-browser.mjs doctor` 自检。绝大多数原因是 MatrixFlow 客户端没登录（新建/删除/绑代理走云端），登录后重试；若提示"没有可用指纹模板"，先在客户端手动创建一个窗口。
 **Q: 技能提示 API 不可达？** 先启动 MatrixFlow 应用，再 `status`。
+**Q: 提示 401 / Token 缺失？** 在客户端"设置 → API 文档"开启本地 API 并把 Token 写入 `local-api-token.txt`（或设 `MF_LOCAL_API_TOKEN`）。
 **Q: 发笔记被"话题不足"拦截？** 正文至少写 3 个与内容相关的话题（同城带地域词）。
 **Q: 发笔记被"文案重复"拦截？** 说明和已发笔记相似，换角度/换结构写全新文案（这是防重复保护）。
 **Q: 定时被拒？** 定时必须至少 1 小时后，用"明天 20:00"这类未来时间。
@@ -274,4 +288,5 @@ node scripts/xhs-marketing.mjs <窗口ID> inbox
 
 ## 更新日志
 
+- 2026-08-06：新增 `doctor` 环境自检命令（新电脑部署第一步）；创建窗口失败原因定位与修复指引（未登录/无指纹模板/Token 缺失）；云端令牌改为 PowerShell 读取 Windows 凭据管理器，任何机器无需 keytar。
 - 2026-08-06：完整教程初版（Codex + DeepSeek + MatrixFlow + 技能安装使用）。

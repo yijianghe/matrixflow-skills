@@ -15,6 +15,9 @@
 ## 30 秒上手
 
 ```bash
+# 0. 新电脑第一步：环境自检（每个 FAIL/WARN 都带修复指引）
+node scripts/mf-browser.mjs doctor
+
 # 1. 确认 MatrixFlow 应用在运行（本机桌面应用，技能通过本地 API 控制）
 node scripts/mf-browser.mjs status
 
@@ -74,6 +77,7 @@ git clone https://github.com/yijianghe/matrixflow-skills.git ~/.codex/skills/mat
 ### 使用前提
 
 - 本机已安装并登录 [MatrixFlow 桌面应用](https://browser.lingjingxia.com)（本地 API `127.0.0.1:19527`）；
+- **客户端已登录账号**：新建/删除环境、绑定代理走云端，未登录会失败（用 `doctor` 自检）；
 - Node.js ≥ 22（脚本只用内置 `fetch` + `WebSocket`，**零 npm 依赖**）；
 - 发笔记需要小红书账号已在浏览器窗口登录（创作服务平台）。
 
@@ -249,6 +253,8 @@ node scripts/mf-browser.mjs workflow-list
 
 ## 常见问题（FAQ）
 
+**Q: 换新电脑后"创建窗口失败"？** 先运行 `node scripts/mf-browser.mjs doctor`。绝大多数原因是 **MatrixFlow 客户端没登录**——新建/删除/绑代理都要走云端；请先登录账号，再把 `[WARN] 云端账号未登录` 一项跑到 `[PASS]`。首次使用还需要至少一个已存在的环境作为指纹模板。
+**Q: 换新电脑后提示 401 / Token 缺失？** 在 MatrixFlow 客户端"设置 → API 文档"开启本地 API，把 Token 写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`（或用环境变量 `MF_LOCAL_API_TOKEN`）。
 **Q: 提示 API 不可达？** 先启动 MatrixFlow 应用，再 `status`。
 **Q: Token 缺失？** 应用"设置 → API 文档"复制 Token，或确认 `local-api-token.txt` 存在。
 **Q: 发笔记被"文案重复"拦截？** 说明与历史笔记相似，换角度/换结构写全新文案（这是故意的）。
@@ -259,6 +265,7 @@ node scripts/mf-browser.mjs workflow-list
 
 ## 更新日志
 
+- **2026-08-06**：新增 `doctor` 环境自检命令（新电脑部署第一步）；创建窗口失败原因定位（未登录/无指纹模板/Token 缺失）；云端令牌改为 PowerShell 读取 Windows 凭据管理器，任何机器无需 keytar。
 - **2026-08-06**：发笔记规则强化——默认私密立即发布；话题 ≥3 强制；文案永不重复（历史库双拦截）；定时至少 1 小时；同城 SEO 话题公式；100+ 行业速查库；私信 inbox 命令；评论二级/三级展开。
 - **2026-08-05**：xhs-publish.mjs 快速发布（文字转图片+随机模板+定时）；养号循环 v2（只滚详情容器/30-45s/概率互动）；全行业 SOP 框架。
 
