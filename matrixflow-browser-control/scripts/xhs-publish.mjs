@@ -141,6 +141,99 @@ function findLocalImage(imagePath, imageDir) {
   return null;
 }
 
+async function fillForm(cdp, opt, stamp) {
+  const hasForm = await evalInPage(cdp, `!!document.querySelector('input[placeholder*="标题"]')`);
+  if (!hasForm) {
+    const next = await centerOf(cdp, `[...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '下一步')`);
+    if (!next) throw new Error("下一步 button not found");
+    await clickAt(cdp, next.x, next.y);
+    stamp("进入发布表单");
+    await waitFor(cdp, `!!document.querySelector('input[placeholder*="标题"]')`, 15000);
+  }
+
+  await evalInPage(cdp, `(() => {
+    const el = document.querySelector('input[placeholder*="标题"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(el, ${JSON.stringify(opt.title)});
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return el.value;
+  })()`);
+  await evalInPage(cdp, `(() => {
+    const ed = document.querySelector('.tiptap.ProseMirror');
+    if (!ed) return 'no-editor';
+    ed.focus();
+    ed.innerHTML = '';
+    document.execCommand('insertText', false, ${JSON.stringify(opt.body)});
+    return (ed.textContent || '').slice(0, 40);
+  })()`);
+  stamp("标题+正文已填");
+
+  if (opt.visibility !== "公开可见") {
+    const setVisibility = async () => {
+      const perm = await centerOf(cdp, `document.querySelector('.permission-card-select')`);
+      if (!perm) return false;
+      await clickAt(cdp, perm.x, perm.y);
+      const o = await waitFor(cdp, `(() => {
+        const cands = [...document.querySelectorAll('.group-info .name, [class*="permission"] [class*="option"]')].filter(e => e.children.length === 0 && (e.textContent || '').trim() === ${JSON.stringify(opt.visibility)});
+        const vis = cands.find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.x >= 0 && r.x < innerWidth && r.y >= 0 && r.y < innerHeight; });
+        if (!vis) return null;
+        vis.scrollIntoView({ block: 'center' });
+        const r = vis.getBoundingClientRect();
+        return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+      })()`, 3000, 200);
+      if (!o) return false;
+      const { x, y } = JSON.parse(o);
+      await clickAt(cdp, x, y);
+      for (let i = 0; i < 10; i++) {
+        await sleep(200);
+        const matched = await evalInPage(cdp, `(() => {
+          const p = document.querySelector('.permission-card-select');
+          const t = p ? (p.textContent || '').trim() : '';
+          return t.includes(${JSON.stringify(opt.visibility)});
+        })()`);
+        if (matched) return true;
+      }
+      return false;
+    };
+    let ok = await setVisibility();
+    if (!ok) ok = await setVisibility();
+    stamp("可见范围：" + (ok ? opt.visibility : "设置失败！"));
+  }
+
+  if (opt.draft) {
+    const draftBtn = await evalInPage(cdp, `(() => {
+      const cands = [
+        ...document.querySelectorAll('button, [role="button"], xhs-draft-btn, [class*="draft"]')
+      ].filter((x) => /草稿/.test((x.textContent || '').trim() + ' ' + (x.getAttribute('aria-label') || '')));
+      const vis = cands.find((x) => { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.x >= 0 && r.x < innerWidth && r.y >= 0 && r.y < innerHeight; });
+      if (!vis) return null;
+      vis.click();
+      return 'clicked';
+    })()`);
+    stamp("已点存草稿：" + (draftBtn || "未找到草稿按钮（表单已保留，可直接人工存/发）"));
+  } else {
+    const pub = await evalInPage(cdp, `(() => {
+      const host = document.querySelector('xhs-publish-btn');
+      if (!host) return 'no-publish-host';
+      const sr = host._sr || host.shadowRoot;
+      if (!sr) return 'no-shadow';
+      const b = sr.querySelector('button.bg-red');
+      if (!b) return 'no-red-btn';
+      b.click();
+      return 'clicked';
+    })()`);
+    stamp("发布：" + pub);
+    let published = false;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const u = await evalInPage(cdp, "location.href");
+      if (u && u.includes("published=true")) { published = true; break; }
+    }
+    stamp("发布结果：" + (published ? "成功" : "待确认"));
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const profileId = args[0];
@@ -209,8 +302,18 @@ async function main() {
   await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true }).catch(() => {});
 
   // 等待页面可交互（模式选择或表单）
-  await waitFor(cdp, `!!(/上传图文|上传视频|input[placeholder*="标题"]/.test(document.body.innerText || '') || document.querySelector('input[placeholder*="标题"]'))`, 40000);
-  await sleep(600);
+  await waitFor(cdp, `!!(/上传图文|上传视频/.test(document.body.innerText || '') || document.querySelector('input[placeholder*="标题"]'))`, 40000);
+  await sleep(300);
+
+  // 如果已经在发布表单（有标题输入框，封面已就绪）→ 直接进入填表单步骤，省掉封面流程
+  const alreadyForm = await evalInPage(cdp, `!!document.querySelector('input[placeholder*="标题"]')`);
+  if (alreadyForm) {
+    stamp("检测到已有表单（复用当前封面）");
+    await fillForm(cdp, opt, stamp);
+    cdp.close();
+    console.log(`TOTAL: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    return;
+  }
 
   // 若停在「上传视频」模式 → 切「上传图文」（过滤隐藏副本）
   const mode = await evalInPage(cdp, `(() => {
@@ -359,96 +462,8 @@ async function main() {
     await sleep(400);
   }
 
-  // 下一步 → 表单
-  const next = await centerOf(cdp, `[...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '下一步')`);
-  if (!next) throw new Error("下一步 button not found");
-  await clickAt(cdp, next.x, next.y);
-  stamp("进入发布表单");
-  await waitFor(cdp, `!!document.querySelector('input[placeholder*="标题"]')`, 20000);
-
-  await evalInPage(cdp, `(() => {
-    const el = document.querySelector('input[placeholder*="标题"]');
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-    setter.call(el, ${JSON.stringify(opt.title)});
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    return el.value;
-  })()`);
-  await evalInPage(cdp, `(() => {
-    const ed = document.querySelector('.tiptap.ProseMirror');
-    if (!ed) return 'no-editor';
-    ed.focus();
-    ed.innerHTML = '';
-    document.execCommand('insertText', false, ${JSON.stringify(opt.body)});
-    return (ed.textContent || '').slice(0, 40);
-  })()`);
-  stamp("标题+正文已填");
-
-  // 可见范围（轮询等选项出现 + 点后验证 + 重试一次）
-  if (opt.visibility !== "公开可见") {
-    const setVisibility = async () => {
-      const perm = await centerOf(cdp, `document.querySelector('.permission-card-select')`);
-      if (!perm) return false;
-      await clickAt(cdp, perm.x, perm.y);
-      const o = await waitFor(cdp, `(() => {
-        const cands = [...document.querySelectorAll('.group-info .name, [class*="permission"] [class*="option"]')].filter(e => e.children.length === 0 && (e.textContent || '').trim() === ${JSON.stringify(opt.visibility)});
-        const vis = cands.find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.x >= 0 && r.x < innerWidth && r.y >= 0 && r.y < innerHeight; });
-        if (!vis) return null;
-        vis.scrollIntoView({ block: 'center' });
-        const r = vis.getBoundingClientRect();
-        return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
-      })()`, 4000, 300);
-      if (!o) return false;
-      const { x, y } = JSON.parse(o);
-      await clickAt(cdp, x, y);
-      for (let i = 0; i < 10; i++) {
-        await sleep(300);
-        const matched = await evalInPage(cdp, `(() => {
-          const p = document.querySelector('.permission-card-select');
-          const t = p ? (p.textContent || '').trim() : '';
-          return t.includes(${JSON.stringify(opt.visibility)});
-        })()`);
-        if (matched) return true;
-      }
-      return false;
-    };
-    let ok = await setVisibility();
-    if (!ok) ok = await setVisibility();
-    stamp("可见范围：" + (ok ? opt.visibility : "设置失败！"));
-  }
-
-  // 发布 or 存草稿
-  if (opt.draft) {
-    const draftBtn = await evalInPage(cdp, `(() => {
-      const cands = [
-        ...document.querySelectorAll('button, [role="button"], xhs-draft-btn, [class*="draft"]')
-      ].filter((x) => /草稿/.test((x.textContent || '').trim() + ' ' + (x.getAttribute('aria-label') || '')));
-      const vis = cands.find((x) => { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.x >= 0 && r.x < innerWidth && r.y >= 0 && r.y < innerHeight; });
-      if (!vis) return null;
-      vis.click();
-      return 'clicked';
-    })()`);
-    stamp("已点存草稿：" + (draftBtn || "未找到草稿按钮（表单已保留，可直接人工存/发）"));
-  } else {
-    const pub = await evalInPage(cdp, `(() => {
-      const host = document.querySelector('xhs-publish-btn');
-      if (!host) return 'no-publish-host';
-      const sr = host._sr || host.shadowRoot;
-      if (!sr) return 'no-shadow';
-      const b = sr.querySelector('button.bg-red');
-      if (!b) return 'no-red-btn';
-      b.click();
-      return 'clicked';
-    })()`);
-    stamp("发布：" + pub);
-    let published = false;
-    for (let i = 0; i < 30; i++) {
-      await sleep(800);
-      const u = await evalInPage(cdp, "location.href");
-      if (u && u.includes("published=true")) { published = true; break; }
-    }
-    stamp("发布结果：" + (published ? "成功" : "待确认"));
-  }
+  // 下一步 → 表单 → 填标题正文 → 可见范围 → 发布
+  await fillForm(cdp, opt, stamp);
 
   cdp.close();
   console.log(`TOTAL: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
