@@ -32,6 +32,17 @@ node scripts/xhs-publish.mjs <profileId> \
 用主预览图（宽 > 200px 的 img）src 前后对比验证确实切换。模板名以页面实际文本为准，
 `--template` 匹配不到就自动退回随机。
 
+**2026-08-05 实测后补强（用户反馈"模板点错/弹出文件选择框/文案重复"）**：
+1. **模板验证必须双保险**：点击后轮询 `.cover-item-container` 的 active/selected/checked 类
+   （选中项通常有红框），或主预览图 src 变化；两项都没命中就重试点，最多 3 次。
+   只验证 src 不够（某些模板切换 src 不变）。
+2. **防止误弹文件选择框**：脚本启动时执行 `Page.setInterceptFileChooserDialog({enabled:true})`，
+   即使点击坐标误落在"上传图片"上，也只会拦截、不会弹出 Windows 文件对话框；
+   本地图片模式直接对隐藏 `input[type=file]` 用 `DOM.setFileInputFiles` 注入，全程不弹窗。
+3. **文案禁止重复**：发布前必须先看同行爆款（`xhs-marketing.mjs reference/pick` 或搜索），
+   每次换不同的选题结构（同行带去型 / 避坑干货型 / 场景共鸣型 / 被夸人设型…），
+   标题 ≤20 字、封面文字与正文一致、话题 4-5 个。同一账号不要连续两篇同结构同话术。
+
 ## 一、核心要点（与旧流程的差异）
 
 1. 不要用 `input[type=file]` 上传本地图；而是点击「上传图片，或写文字生成图片」入口。

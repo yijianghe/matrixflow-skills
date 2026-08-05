@@ -209,6 +209,8 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 - **内容生成**：用 `reference` 拉爆款结构（标题/点赞/评论区高频问题）→ 改写种草文案（体验式、不硬广、引导私信）；
 - **封面图（推荐原生文字生成图片，已验证 2026-08-05）**：打开创作平台发布页 → 点击「上传图片，或写文字生成图片」→ 选「文字配图」→ 输入封面文案 → 点「生成图片」→ 平台一次生成多套排版，选「基础」→ 点「下一步」直接带入发布表单。全程不需要本地素材/占位图。详见 `references/xhs-publish-native-text-to-image.md`；
 - **模板随机（2026-08-05 新增）**：文字配图生成后平台会给 10 套模板（基础/美漫/插图/涂鸦/涂写/清新/边框/备忘/简约/光影/手写），脚本默认随机选一套并验证预览图确实切换；`--template <名字>` 可固定某套。每次发布模板都不同，避免重复感；
+- **发布前必看同行爆款（2026-08-05 强制）**：每次发笔记前先用 `xhs-marketing.mjs reference/pick` 或搜索拉同行爆款，换不同选题结构写新文案（同行带去型 / 避坑干货型 / 场景共鸣型 / 被夸人设型…），禁止同一账号连续两篇同结构同话术；标题 ≤20 字、正文带 4-5 个话题、封面文字与标题呼应；
+- **防弹文件框（2026-08-05）**：脚本启动即拦截系统文件选择对话框（`Page.setInterceptFileChooserDialog`），即使误点"上传图片"也不会弹出 Windows 窗口；本地图片走 `DOM.setFileInputFiles` 直接注入；
 - **表单自动填充（已验证可行）**：标题用 `input[placeholder*="标题"]`（触发 input/change），**标题必须 ≤20 字**（超长会被拦截）；正文用 `.tiptap.ProseMirror` + `document.execCommand('insertText', ...)`（换行自动成段落），话题直接写在正文末尾（`#话题`）；
 - **可见范围**：在「更多设置」里点「公开可见」下拉 → 选「仅自己可见」（下拉必须用 CDP 真实鼠标坐标点击，`element.click()` 无效）；
 - **发布按钮（已攻克 shadow DOM）**：新版创作页的发布条是自定义元素 `xhs-publish-btn`，按钮在内部 shadow DOM，通过 `document.querySelector('xhs-publish-btn')._sr.querySelector('button.bg-red')` 拿到红色「发布」按钮并点击。发布成功标志：发布页 URL 出现 `published=true`，然后到「笔记管理 → 仅自己可见」里确认。

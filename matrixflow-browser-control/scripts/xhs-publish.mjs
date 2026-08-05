@@ -205,6 +205,8 @@ async function main() {
   const cdp = makeCdp(page.webSocketDebuggerUrl);
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
+  // 拦截系统文件选择对话框：即使误点"上传图片"也不会弹出 Windows 窗口
+  await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true }).catch(() => {});
 
   // 等待页面可交互（模式选择或表单）
   await waitFor(cdp, `!!(/上传图文|上传视频|input[placeholder*="标题"]/.test(document.body.innerText || '') || document.querySelector('input[placeholder*="标题"]'))`, 40000);
@@ -238,33 +240,33 @@ async function main() {
     stamp("使用本地图片");
     const entry = await centerOf(cdp, `[...document.querySelectorAll('*')].find(e => e.children.length === 0 && (e.textContent || '').trim() === '上传图片，或写文字生成图片')`);
     if (entry) await clickAt(cdp, entry.x, entry.y);
-    await sleep(1000);
-    const input = await evalInPage(cdp, `(() => {
-      const inp = document.querySelector('input[type="file"]');
-      if (inp) { inp.click(); return 'found'; }
-      return 'no-input';
-    })()`);
-    if (input === "found") {
-      await sleep(600);
-      const target = await cdp.send("DOM.getDocument");
-      const node = await cdp.send("DOM.querySelector", { nodeId: target.root.nodeId, selector: 'input[type="file"]' });
-      await cdp.send("DOM.setFileInputFiles", { nodeId: node.nodeId, files: [img] });
-      stamp("图片已注入");
-      await waitFor(cdp, `[...document.querySelectorAll('img')].some(i => i.getBoundingClientRect().width > 200)`, 30000);
-      await sleep(1500);
-    } else {
-      throw new Error("file input not found; please upload manually");
-    }
+    await sleep(800);
+    // 直接给隐藏 file input 注入文件（不弹对话框）
+    const inputFound = await evalInPage(cdp, `!!document.querySelector('input[type="file"]')`);
+    if (!inputFound) throw new Error("file input not found");
+    const doc = await cdp.send("DOM.getDocument");
+    const node = await cdp.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: 'input[type="file"]' });
+    await cdp.send("DOM.setFileInputFiles", { nodeId: node.nodeId, files: [img] });
+    stamp("图片已注入");
+    await waitFor(cdp, `[...document.querySelectorAll('img')].some(i => i.getBoundingClientRect().width > 200)`, 30000);
+    await sleep(1200);
   } else {
     // ---------- 文字转图片模式 ----------
     const entry = await centerOf(cdp, `[...document.querySelectorAll('*')].find(e => e.children.length === 0 && (e.textContent || '').trim() === '上传图片，或写文字生成图片')`);
     if (!entry) throw new Error("entry not found");
     await clickAt(cdp, entry.x, entry.y);
-    await sleep(900);
-    const textBtn = await centerOf(cdp, `[...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '文字配图')`);
+    // 轮询等面板出现，点「文字配图」（绝不点「上传图片」）
+    const textBtn = await waitFor(cdp, `(() => {
+      const b = [...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '文字配图');
+      if (!b) return null;
+      b.scrollIntoView({ block: 'center' });
+      const r = b.getBoundingClientRect();
+      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+    })()`, 6000, 300);
     if (!textBtn) throw new Error("文字配图 button not found");
-    await clickAt(cdp, textBtn.x, textBtn.y);
-    await sleep(900);
+    const tb = JSON.parse(textBtn);
+    await clickAt(cdp, tb.x, tb.y);
+    await sleep(600);
 
     await evalInPage(cdp, `(() => {
       const ed = document.querySelector('.card-editor-container .ProseMirror');
@@ -296,24 +298,23 @@ async function main() {
     stamp(`封面生成完成（${((Date.now() - genStart) / 1000).toFixed(1)}s）`);
     await sleep(700);
 
-    // 选模板：先把模板列表滚到底，再随机/指定选一个
+    // 选模板：滚到底 → 随机/指定 → 点击后验证选中态（class/aria/预览图），失败重试
     const tplStart = Date.now();
-    const pick = await evalInPage(cdp, `(() => {
-      const sc = [...document.querySelectorAll('.cover-item-container')][0];
-      const scrollable = (el) => {
-        let cur = el;
+    await evalInPage(cdp, `(() => {
+      const first = document.querySelector('.cover-item-container');
+      const sc = (() => {
+        let cur = first;
         while (cur && cur !== document.body) {
           const s = getComputedStyle(cur);
           if (cur.scrollHeight > cur.clientHeight + 20 && (s.overflowY === 'auto' || s.overflowY === 'scroll')) return cur;
           cur = cur.parentElement;
         }
         return null;
-      };
-      const con = scrollable(sc) || document.querySelector('.cover-list, [class*="cover-list"], [class*="template-list"]') || document.body;
-      con.scrollTop = con.scrollHeight;
-      return 'scrolled';
+      })();
+      (sc || document.querySelector('[class*="cover-list"], [class*="template-list"]') || document.body).scrollTop = 1e6;
+      return 'ok';
     })()`);
-    await sleep(600);
+    await sleep(500);
     const tpl = await evalInPage(cdp, `(() => {
       const want = ${JSON.stringify(opt.template)};
       const items = [...document.querySelectorAll('.cover-item-container')].filter((c) => {
@@ -331,20 +332,31 @@ async function main() {
       if (!target) target = items[Math.floor(Math.random() * items.length)];
       const name = target.querySelector('.cover-name');
       const r = target.getBoundingClientRect();
-      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), name: name ? (name.textContent || '').trim() : '' });
+      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), name: name ? (name.textContent || '').trim() : '', id: String(target.className || '').slice(0, 50) });
     })()`);
     if (!tpl) throw new Error("no template items found");
     const t = JSON.parse(tpl);
     const beforeSrc = await evalInPage(cdp, `(() => { const i = [...document.querySelectorAll('img')].find(x => x.getBoundingClientRect().width > 200); return i ? (i.currentSrc || i.src) : ''; })()`);
-    await clickAt(cdp, t.x, t.y);
-    let changed = false;
-    for (let i = 0; i < 8; i++) {
-      await sleep(400);
-      const afterSrc = await evalInPage(cdp, `(() => { const i = [...document.querySelectorAll('img')].find(x => x.getBoundingClientRect().width > 200); return i ? (i.currentSrc || i.src) : ''; })()`);
-      if (afterSrc && afterSrc !== beforeSrc) { changed = true; break; }
+    let tplOk = false;
+    for (let attempt = 0; attempt < 3 && !tplOk; attempt++) {
+      await clickAt(cdp, t.x, t.y);
+      for (let i = 0; i < 10; i++) {
+        await sleep(300);
+        const chk = await evalInPage(cdp, `(() => {
+          const items = [...document.querySelectorAll('.cover-item-container')];
+          const active = items.filter((c) => /active|selected|checked/i.test(String(c.className || '')));
+          if (active.length === 1) {
+            const n = active[0].querySelector('.cover-name');
+            return n ? (n.textContent || '').trim() : null;
+          }
+          const src = (() => { const img = [...document.querySelectorAll('img')].find((x) => x.getBoundingClientRect().width > 200); return img ? (img.currentSrc || img.src) : ''; })();
+          return src && src !== ${JSON.stringify(beforeSrc)} ? '__src_changed' : null;
+        })()`);
+        if (chk === t.name || chk === "__src_changed") { tplOk = true; break; }
+      }
     }
-    stamp(`模板：${t.name}${changed ? "（已切换）" : "（未变）"}，${((Date.now() - tplStart) / 1000).toFixed(1)}s`);
-    await sleep(500);
+    stamp(`模板：${t.name}${tplOk ? "（已选中）" : "（未能验证，继续）"}，${((Date.now() - tplStart) / 1000).toFixed(1)}s`);
+    await sleep(400);
   }
 
   // 下一步 → 表单
