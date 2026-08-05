@@ -6,6 +6,32 @@
 适用页面：`https://creator.xiaohongshu.com/publish/publish?source=official`
 （需要先在浏览器环境里登录小红书创作服务平台，账号：韩bao）。
 
+## 零、快速发布脚本（2026-08-05 新增，推荐直接用）
+
+`scripts/xhs-publish.mjs` 一条 CDP 连接跑完：切「上传图文」→ 文字转图片 → 随机选模板 →
+填标题/正文 → 改「仅自己可见」→ 发布。实测发布流程 ~10-15 秒（同文案走缓存秒出）。
+
+```bash
+node scripts/xhs-publish.mjs <profileId> \
+  --title "标题（≤20字）" --cover "封面文字" --body-file D:\body.txt \
+  --template random --visibility 仅自己可见
+```
+
+- 模板：默认 random（每次随机不同），也可指定 `基础/美漫/插图/涂鸦/涂写/清新/边框/备忘/简约/光影/手写`；
+- 本地图片：`--image <路径>` 或 `--image-dir <文件夹>`；默认自动从
+  `C:\Users\admin\Downloads`、桌面、`C:\Users\admin\Documents\ShareX\Screenshots` 找图；
+  客户问"图片在哪"就回答这三个位置（下载目录 / 桌面 / ShareX 截图目录）；
+- `--draft` 只填表单尝试存草稿（草稿按钮可能藏在"更多"菜单，找不到会保留表单）；
+- 公开发布必须显式 `--visibility 公开可见`（默认强制私密）。
+
+### 模板随机选择实现要点
+
+生成完成后，模板网格是 `.cover-item-container`（名字在 `.cover-name`），网格可滚动
+（10 套：基础/美漫/插图/涂鸦/涂写/清新/边框/备忘/简约/光影/手写，部分名字与旧文档不一致）。
+选法：先把模板列表滚动容器滚到底，收集视口内可见的 `.cover-item-container`，随机点一个，
+用主预览图（宽 > 200px 的 img）src 前后对比验证确实切换。模板名以页面实际文本为准，
+`--template` 匹配不到就自动退回随机。
+
 ## 一、核心要点（与旧流程的差异）
 
 1. 不要用 `input[type=file]` 上传本地图；而是点击「上传图片，或写文字生成图片」入口。

@@ -192,8 +192,23 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 
 ## 发笔记（发布流程现状）
 
+- **快速发布脚本（推荐，2026-08-05 新增）**：`scripts/xhs-publish.mjs` —— 一条 CDP 连接走完，默认文字转图片 + 每次随机选不同模板，实测发布流程 ~10-15 秒（同封面文案走 GPU 缓存秒出；全新文案首次生成 30-60 秒是平台 GPU 耗时，无法压缩）。
+  ```bash
+  node scripts/xhs-publish.mjs <profileId> \
+    --title "标题（≤20字）" --cover "封面文字" --body-file D:\body.txt \
+    [--template random|基础|美漫|插图|涂鸦|涂写|清新|边框|备忘|简约|光影|手写] \
+    [--visibility 仅自己可见|公开可见|仅互关好友可见] \
+    [--image <文件路径> | --image-dir <文件夹>] \
+    [--draft]
+  ```
+  - 默认可见范围「仅自己可见」（私密）；要公开必须显式 `--visibility 公开可见`；
+  - 正文用 `--body-file <path>` 传 UTF-8 文本文件最稳（避免命令行引号问题）；
+  - **本地图片模式**：`--image <路径>` 指定单张图，或 `--image-dir <文件夹>` 指定目录；
+    默认会从 `C:\Users\admin\Downloads`（下载目录）、桌面、`Documents\ShareX\Screenshots` 自动找第一张可用图片。
+    **客户说"用配置图片"时，告诉客户图片放在哪：默认 `C:\Users\admin\Downloads` 或桌面，截图在 `C:\Users\admin\Documents\ShareX\Screenshots`；也可以直接把图片放进这些文件夹，脚本会自动读取。**
 - **内容生成**：用 `reference` 拉爆款结构（标题/点赞/评论区高频问题）→ 改写种草文案（体验式、不硬广、引导私信）；
 - **封面图（推荐原生文字生成图片，已验证 2026-08-05）**：打开创作平台发布页 → 点击「上传图片，或写文字生成图片」→ 选「文字配图」→ 输入封面文案 → 点「生成图片」→ 平台一次生成多套排版，选「基础」→ 点「下一步」直接带入发布表单。全程不需要本地素材/占位图。详见 `references/xhs-publish-native-text-to-image.md`；
+- **模板随机（2026-08-05 新增）**：文字配图生成后平台会给 10 套模板（基础/美漫/插图/涂鸦/涂写/清新/边框/备忘/简约/光影/手写），脚本默认随机选一套并验证预览图确实切换；`--template <名字>` 可固定某套。每次发布模板都不同，避免重复感；
 - **表单自动填充（已验证可行）**：标题用 `input[placeholder*="标题"]`（触发 input/change），**标题必须 ≤20 字**（超长会被拦截）；正文用 `.tiptap.ProseMirror` + `document.execCommand('insertText', ...)`（换行自动成段落），话题直接写在正文末尾（`#话题`）；
 - **可见范围**：在「更多设置」里点「公开可见」下拉 → 选「仅自己可见」（下拉必须用 CDP 真实鼠标坐标点击，`element.click()` 无效）；
 - **发布按钮（已攻克 shadow DOM）**：新版创作页的发布条是自定义元素 `xhs-publish-btn`，按钮在内部 shadow DOM，通过 `document.querySelector('xhs-publish-btn')._sr.querySelector('button.bg-red')` 拿到红色「发布」按钮并点击。发布成功标志：发布页 URL 出现 `published=true`，然后到「笔记管理 → 仅自己可见」里确认。
