@@ -47,6 +47,8 @@ node scripts/mf-browser.mjs doctor
 > 在别的电脑上“创建窗口失败”绝大多数是第 3 条：**客户端没登录**。`create` 是走云端新建的（本地接口只是透传），必须登录后才能用。
 > 部分客户端版本本地接口不支持新建/删除环境，脚本已自动回退到云端接口，无需额外处理；只要客户端已登录即可。
 > 如果 `doctor` 显示“云端登录令牌未找到”但客户端明明已登录，请**用管理员身份重新打开终端**再运行（读取 Windows 系统凭据需要权限）。
+> **重要：如果 `doctor` 自检全部 `[PASS]`，不要修改任何脚本**——所有兼容修复已内置（版本号见 doctor 第一行）。
+> 若 Agent 说要“打补丁/改代码”，先看 `doctor` 是否输出“内置兼容修复齐全”，是则直接使用，不需要改。
 
 ## 工作流程
 
@@ -65,8 +67,8 @@ node scripts/mf-browser.mjs doctor
 | `list` | 列出运行中的环境（profileId、状态、url） |
 | `open <id\|name> [url ...]` | 打开环境窗口（可带启动网址），等待就绪后返回 |
 | `open-batch <id1,id2,...>` | 并发批量打开多个环境（每批 3 个，速度快） |
-| `create <name...> [--count N] [--prefix P]` | 新建环境（指纹克隆自第一个环境；--count 批量、--prefix 命名前缀） |
-| `create <name> --proxy host:port[:user:pass]` | 新建环境并绑定代理（默认 SOCKS5，自动创建代理并关联） |
+| `create <name...> [--count N] [--prefix P]` | 新建环境（可一次传多个名称全部创建；指纹克隆自第一个环境；--count 批量、--prefix 命名前缀） |
+| `create <name...> --proxy host:port[:user:pass]` | 新建一个或多个环境并绑定同一代理（默认 SOCKS5，自动创建代理并关联；同名会拦截） |
 | `delete <id\|name>` | 删除环境 |
 | `close <id\|name>` | 关闭环境窗口 |
 | `automa-open <workflowId> [--profile <id>] [--name <name>]` | 打开 Automa 设计器编辑工作流 |

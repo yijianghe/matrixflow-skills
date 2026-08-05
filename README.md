@@ -88,6 +88,7 @@ git clone https://github.com/yijianghe/matrixflow-skills.git ~/.codex/skills/mat
 ```bash
 node scripts/mf-browser.mjs create "小红书1号"              # 新建窗口（指纹克隆）
 node scripts/mf-browser.mjs create "演讲词" --proxy "dc.decodo.com:10115:user:pass"  # 新建+绑代理
+node scripts/mf-browser.mjs create "小红书1" "小红书2" --proxy "host:port:user:pass"  # 一次建多个+同一代理
 node scripts/mf-browser.mjs create "批量号" --count 10 --prefix xhs   # 批量创建
 node scripts/mf-browser.mjs open-batch id1,id2,id3         # 并发打开（每批3个）
 node scripts/mf-browser.mjs open <id|name>                 # 打开窗口

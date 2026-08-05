@@ -55,6 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
+const SKILL_VERSION = "2026-08-06.4";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function resolveUserDataRoot() {
@@ -304,6 +305,7 @@ function readStdin() {
 async function cmdStatus() {
   const probe = await probeAppRunning();
   const info = {
+    version: SKILL_VERSION,
     node: process.version,
     baseUrl: baseUrl(),
     token: resolveToken() ? "present" : "missing",
@@ -382,12 +384,9 @@ async function cmdCreate(args) {
       "没有可用指纹模板：请先在 MatrixFlow 客户端里手动创建一个环境（当前列表来自云端但缺少指纹数据）。"
     );
   }
-  let proxyId = "";
-  if (proxySpec) {
-    proxyId = await createCloudProxy(proxySpec);
-  }
   const usedNames = new Set(items.map((p) => p.name));
-  let namesList = names.length ? names.slice(0, count) : [];
+  // 显式传入多个名称时全部创建（不按 --count 截断）；--count 只用于自动命名模式
+  let namesList = names.length ? [...names] : [];
   if (namesList.length === 0) {
     if (prefix) {
       for (let i = 1; i <= count; i++) namesList.push(prefix + i);
@@ -407,6 +406,17 @@ async function cmdCreate(args) {
         namesList.push(cand);
       }
     }
+  }
+  // 同名保护：避免出现两个同名窗口（会造成混淆，之前出现过）
+  const dup = namesList.find((n) => usedNames.has(n));
+  if (dup) {
+    throw new Error(
+      `已存在同名环境「${dup}」：为避免混淆请换一个名称，或先用 delete 删除旧环境再创建。`
+    );
+  }
+  let proxyId = "";
+  if (proxySpec) {
+    proxyId = await createCloudProxy(proxySpec);
   }
   const results = [];
   for (const name of namesList) {
@@ -900,6 +910,7 @@ async function cmdDoctor() {
   // 1. Node.js 版本
   const major = Number.parseInt(process.versions.node.split(".")[0], 10);
   info.node = process.version;
+  lines.push(note(`技能版本：${SKILL_VERSION}（最新版已内置全部兼容修复，自检全绿后无需修改脚本）`));
   lines.push(
     major >= 22
       ? ok(`Node.js ${process.version}（满足 >=22 要求）`)
@@ -988,6 +999,25 @@ async function cmdDoctor() {
       )
     );
   }
+
+  // 7. 内置兼容修复是否齐全（防止把旧版/被改坏的脚本当最新版用）
+  try {
+    const selfSrc = readFileSync(fileURLToPath(import.meta.url), "utf8");
+    const builtins = {
+      "运行检测兼容不同版本(probeAppRunning)": /async function probeAppRunning/.test(selfSrc),
+      "新建云端自动回退(createProfile)": /async function createProfile\(body\)/.test(selfSrc),
+      "删除云端自动回退(deleteProfile)": /async function deleteProfile\(id\)/.test(selfSrc),
+      "多名称批量创建": /names\.length \? \[\.\.\.names\]/.test(selfSrc),
+    };
+    const missing = Object.entries(builtins)
+      .filter(([, present]) => !present)
+      .map(([k]) => k);
+    lines.push(
+      missing.length === 0
+        ? ok("内置兼容修复齐全：无需手动修补脚本，直接用")
+        : warn(`检测到缺少内置修复：${missing.join("、")}。请从 GitHub 重新下载最新版技能再使用。`)
+    );
+  } catch {}
 
   console.log([...lines, "", "环境信息:", JSON.stringify(info, null, 2)].join("\n"));
 }
