@@ -480,9 +480,10 @@ async function main() {
     if (args[i] === "--comment") comment = args[++i] || "";
     else if (args[i] === "--notes") notes = Number.parseInt(args[++i], 10) || 5;
     else if (args[i] === "--top") top = Number.parseInt(args[++i], 10) || 3;
+    else if (["--city", "--title", "--to", "--industry"].includes(args[i])) i++;
     else keywords.push(args[i]);
   }
-  if (keywords.length === 0) {
+  if (keywords.length === 0 && action !== "inbox") {
     console.error("请至少提供一个搜索关键词");
     process.exit(1);
   }
@@ -519,7 +520,10 @@ async function main() {
     } else if (action === "pick") {
       for (const kw of keywords) {
         await search(cdp, kw);
+        const kwCore = String(kw).replace(/\s/g, "");
+        const kwFirst = String(kw).split(/\s/)[0];
         const cards = (await collectNotes(cdp, 30))
+          .filter((c) => !kwCore || (c.title || "").includes(kwCore) || (c.title || "").includes(kwFirst))
           .map((c) => ({ ...c, likes: parseCount(c.likeText) }))
           .sort((a, b) => b.likes - a.likes)
           .slice(0, top);
@@ -557,7 +561,10 @@ async function main() {
       }
       for (const kw of keywords) {
         await search(cdp, kw);
+        const kwCore = String(kw).replace(/\s/g, "");
+        const kwFirst = String(kw).split(/\s/)[0];
         const cards = (await collectNotes(cdp, 30))
+          .filter((c) => !kwCore || (c.title || "").includes(kwCore) || (c.title || "").includes(kwFirst))
           .map((c) => ({ ...c, likes: parseCount(c.likeText) }))
           .sort((a, b) => b.likes - a.likes);
         const target = cards[0];
