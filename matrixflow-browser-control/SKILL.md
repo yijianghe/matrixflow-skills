@@ -94,27 +94,32 @@ echo '[{"op":"navigate","url":"https://example.com"},{"op":"waitReady"},{"op":"e
 
 `scripts/human-browse.mjs` 模拟真人浏览信息流：打开每篇笔记、切换图片、滚动评论区、随机人味节奏、给指定笔记点赞。支持“新标签页打开”的网站（跟随新标签→操作→关闭→回到列表）和“同标签跳转”的网站（返回上一页）。
 
-**发现页养号循环（完整版，复刻用户 Automa 脚本，2026-08-05 验证通过）**：`scripts/xhs-feed-browse.mjs`
+**发现页养号循环 v2（2026-08-05 重构，已实测验证）**：`scripts/xhs-feed-browse.mjs`
 
-每篇笔记强制完整执行（不是“打开就结束”）：
+每篇笔记强制完整执行，全程拟真人、动作差异化：
+
 1. 发现页随机选未浏览卡片，真实鼠标点击打开；
 2. 检测笔记类型：视频 / 多图（1/N 页码）/ 单图；
-3. 滚正文 2-4 次（随机间隔 0.9-1.7 秒）；
-4. 多图笔记切图 0-3 次，每次用快照对比验证图片确实切换；
-5. 滚评论区 3-5 次：优先从右侧坐标找滚动容器，分步滚动并触发 scroll 事件，验证生效；
-6. 差异化停留 5-9 秒；
-7. 按概率随机点赞（检查 `like-active`，已赞就不再点，防止取消）；
-8. 关闭笔记（`.close-circle` 等）→ 滚动发现页 650px → 下一篇。
+3. **只滚动右侧内容面板 `.note-scroller`**（正文 + 评论区都在里面），详情打开后**绝对禁止滚动 window/背景瀑布流**；
+4. 图文笔记停留 ≥ 30 秒（默认 30-45 秒随机），视频按播放进度等待（最长 40 秒）；
+5. 多图笔记切图 1-3 次，每次用轮播快照（活跃圆点 / 大图地址 / transform）对比验证确实切换；
+6. 滚评论区 2-4 次，滚到底自动停；随机点开 1-3 个“展开 N 条回复”（`.show-more`）看二级评论，展开后再点嵌套的“查看回复/条回复”看三级评论，用 `.note-scroller.scrollHeight` 增长验证；
+7. 概率互动（默认：点赞 35%、收藏 20%），互动前检查 `like-active` / `collect-active` 状态，已互动不再点；用数字 +1 验证成功，数字 -1 自动恢复；
+8. 每日安全上限：点赞 ≤ 30、收藏 ≤ 20（`--max-likes` / `--max-collects` 控制）；
+9. 关闭笔记（`.close-circle`）并确认已关闭 → 滚发现页 500-800px → 下一篇；
+10. 所有动作次数、间隔、停留时长全部随机，禁止每篇同一套动作模板。
 
 ```bash
-node scripts/human-browse.mjs <profileSpec> <feedUrl> --notes 5 --like 3
-node scripts/xhs-feed-browse.mjs <profileSpec> --rounds 6
+node scripts/xhs-feed-browse.mjs <profileId> --rounds 6
 ```
 
-- `--notes N` — 浏览几篇笔记（默认 5）
-- `--like N` — 给第 N 篇点赞（从 1 开始；0 = 不点赞，默认 0）
-- `--shot PATH` — 最终截图保存路径
-- 示例：`node scripts/human-browse.mjs cmse…@小红书 https://www.xiaohongshu.com/explore --notes 5 --like 3`
+- `--rounds N` — 浏览几篇笔记（默认 6）
+- `--like-ratio 0.35` — 点赞概率（默认 0.35）
+- `--collect-ratio 0.2` — 收藏概率（默认 0.2）
+- `--max-likes 30` — 单次运行点赞上限（默认 30）
+- `--max-collects 20` — 单次运行收藏上限（默认 20）
+- `--min-dwell 30` — 每篇图文最短停留秒数（默认 30）
+- 示例：`node scripts/xhs-feed-browse.mjs cmseose200emqpkjq82p387jj --rounds 8 --like-ratio 0.4`
 
 站点注意点：小红书要点击笔记**卡片**（`section.note-item`），而不是卡片里的 `<a>` 锚点（它的矩形是 0，点不到）；笔记详情链接通常带 `xsec_token`，直接重开可能被重定向回列表。
 
