@@ -20,7 +20,7 @@
  *   - 默认可见范围「仅自己可见」（私密），要公开请显式 --visibility 公开可见。
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -59,6 +59,69 @@ function findProfileDir(profileId) {
     }
   }
   return null;
+}
+
+// ---------- 文案去重（禁止重复发文案） ----------
+function historyPath() {
+  return join(resolveUserDataRoot(), "xhs-publish-history.json");
+}
+
+function loadHistory() {
+  try {
+    const p = historyPath();
+    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
+  } catch {}
+  return [];
+}
+
+function saveHistory(hist) {
+  try {
+    writeFileSync(historyPath(), JSON.stringify(hist, null, 2), "utf8");
+  } catch (e) {
+    console.warn("[xhs-publish] 历史记录写入失败：" + e.message);
+  }
+}
+
+function normalizeText(s) {
+  return String(s || "").replace(/[\s#，。！？、,.!?：:；;""''（）()\[\]【】—\-_]/g, "");
+}
+
+function ngrams(s, n = 2) {
+  const out = new Set();
+  const t = normalizeText(s);
+  for (let i = 0; i <= t.length - n; i++) out.add(t.slice(i, i + n));
+  return out;
+}
+
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  const union = a.size + b.size - inter;
+  return inter / union;
+}
+
+// 返回与历史重复的记录；无重复返回 null
+function findDuplicate(title, body) {
+  const hist = loadHistory();
+  const tN = normalizeText(title);
+  const bG = ngrams(body || "");
+  for (const h of hist) {
+    if (h.title && normalizeText(h.title) === tN) {
+      return { ...h, reason: "标题完全相同" };
+    }
+    if (h.body && bG.size > 20) {
+      const sim = jaccard(bG, ngrams(h.body));
+      if (sim > 0.55) return { ...h, reason: `正文相似度 ${sim.toFixed(2)} 过高` };
+    }
+  }
+  return null;
+}
+
+function appendHistory(title, body, industry) {
+  const hist = loadHistory();
+  hist.push({ title, body, date: new Date().toISOString(), industry: industry || "" });
+  saveHistory(hist);
 }
 
 function makeCdp(wsUrl) {
@@ -454,6 +517,7 @@ async function fillForm(cdp, opt, stamp) {
       return 'clicked';
     })()`);
     stamp("已点存草稿：" + (draftBtn || "未找到草稿按钮（表单已保留，可直接人工存/发）"));
+    return false;
   } else {
     const pub = await evalInPage(cdp, `(() => {
       const host = document.querySelector('xhs-publish-btn');
@@ -473,6 +537,7 @@ async function fillForm(cdp, opt, stamp) {
       if (u && u.includes("published=true")) { published = true; break; }
     }
     stamp("发布结果：" + (published ? "成功" : "待确认"));
+    return published;
   }
 }
 
@@ -483,7 +548,7 @@ async function main() {
     console.error("Usage: xhs-publish.mjs <profileId> --title ... --cover ... --body ... [options]");
     process.exit(1);
   }
-  const opt = { template: "random", visibility: "仅自己可见", draft: false };
+  const opt = { template: "random", visibility: "仅自己可见", draft: false, industry: "" };
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--title") opt.title = args[++i];
     if (args[i] === "--cover") opt.cover = args[++i];
@@ -495,6 +560,7 @@ async function main() {
     if (args[i] === "--image-dir") opt.imageDir = args[++i];
     if (args[i] === "--draft") opt.draft = true;
     if (args[i] === "--schedule") opt.schedule = args[++i];
+    if (args[i] === "--industry") opt.industry = args[++i];
   }
   if (!opt.title || !opt.body) {
     console.error("Missing --title or --body/--body-file");
@@ -502,6 +568,12 @@ async function main() {
   }
   if (opt.title.length > 20) {
     console.error(`标题 ${opt.title.length} 字 > 20，请缩短`);
+    process.exit(1);
+  }
+  // 文案去重拦截：标题相同或正文相似度过高直接拒绝（用户铁律：永不重复文案）
+  const dup = findDuplicate(opt.title, opt.body);
+  if (dup) {
+    console.error(`文案重复拦截：${dup.reason}。与「${dup.title}」（${dup.date ? dup.date.slice(0, 10) : "历史记录"}）重复，请换角度/换结构写全新文案。`);
     process.exit(1);
   }
   if (opt.template !== "random" && !TITLES.includes(opt.template)) {
@@ -717,7 +789,11 @@ async function main() {
   }
 
   // 下一步 → 表单 → 填标题正文 → 可见范围 → 发布
-  await fillForm(cdp, opt, stamp);
+  const published = await fillForm(cdp, opt, stamp);
+  if (published) {
+    appendHistory(opt.title, opt.body, opt.industry);
+    stamp("已记录到发布历史（防重复）");
+  }
 
   cdp.close();
   console.log(`TOTAL: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
