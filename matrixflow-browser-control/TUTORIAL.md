@@ -35,6 +35,7 @@ codex --version   # CLI 版本号
 ```
 
 > 提示：本教程的技能脚本只依赖 Node.js 内置能力（fetch + WebSocket），不装任何 npm 包。
+> 如果电脑上没装 Node.js：Codex 应用通常自带运行时，可让 AI 在 `%LOCALAPPDATA%\OpenAI\Codex\runtimes` 里找到 `node.exe` 直接用它运行脚本。
 
 ---
 

@@ -12,6 +12,7 @@ description: '控制 MatrixFlow 指纹浏览器（窗口=环境）：打开/关�
 - MatrixFlow 桌面应用正在运行（如果 `status` 显示 API 不可达，先启动应用）。
 - MatrixFlow 客户端已**登录账号**（新建/删除环境、绑定代理都要走云端，未登录会失败）。
 - Node.js >= 22（脚本只使用内置的 `fetch` + `WebSocket`，无任何 npm 依赖）。
+  - 如果客户电脑没装 Node：让 Agent 在 `%LOCALAPPDATA%\OpenAI\Codex\runtimes` 里找应用自带的 `node.exe` 来运行脚本（`& 那个node.exe scripts\mf-browser.mjs doctor`）。
 - 脚本：`scripts/mf-browser.mjs`（用 `node` 运行）。
 
 ## 快速开始
