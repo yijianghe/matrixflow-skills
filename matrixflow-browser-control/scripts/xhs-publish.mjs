@@ -16,7 +16,7 @@
  *
  * 说明：
  *   - 正文建议用 --body-file <path> 传入 UTF-8 文本文件（避免命令行引号问题）。
- *   - 本地图片默认目录：C:\Users\admin\Downloads、桌面、ShareX 截图目录。
+ *   - 本地图片默认目录：下载目录（%USERPROFILE%\Downloads）、桌面、ShareX 截图目录。
  *   - 默认可见范围「仅自己可见」（私密），要公开请显式 --visibility 公开可见。
  */
 

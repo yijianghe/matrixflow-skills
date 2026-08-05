@@ -13,13 +13,13 @@
 
 ```bash
 node scripts/xhs-publish.mjs <profileId> \
-  --title "标题（≤20字）" --cover "封面文字" --body-file D:\body.txt \
+  --title "标题（≤20字）" --cover "封面文字" --body-file %USERPROFILE%\body.txt \
   --template random --visibility 仅自己可见
 ```
 
 - 模板：默认 random（每次随机不同），也可指定 `基础/美漫/插图/涂鸦/涂写/清新/边框/备忘/简约/光影/手写`；
 - 本地图片：`--image <路径>` 或 `--image-dir <文件夹>`；默认自动从
-  `C:\Users\admin\Downloads`、桌面、`C:\Users\admin\Documents\ShareX\Screenshots` 找图；
+  下载目录（`%USERPROFILE%\Downloads`）、桌面、`%USERPROFILE%\Documents\ShareX\Screenshots` 找图；
   客户问"图片在哪"就回答这三个位置（下载目录 / 桌面 / ShareX 截图目录）；
 - `--draft` 只填表单尝试存草稿（草稿按钮可能藏在"更多"菜单，找不到会保留表单）；
 - 公开发布必须显式 `--visibility 公开可见`（默认强制私密）。

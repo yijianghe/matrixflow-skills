@@ -250,7 +250,7 @@ async function main() {
   }
   let notes = 5;
   let likeIndex = 0;
-  let shot = process.env.MF_SHOT || "D:\\mf-human-browse.png";
+  let shot = process.env.MF_SHOT || join(homedir(), "mf-human-browse.png");
   for (let i = 2; i < args.length; i++) {
     if (args[i] === "--notes") notes = Number.parseInt(args[++i], 10) || 5;
     if (args[i] === "--like") likeIndex = Number.parseInt(args[++i], 10) || 0;
