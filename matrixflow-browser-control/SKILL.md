@@ -42,6 +42,7 @@ node scripts/mf-browser.mjs text <id|name>
 | `open <id\|name> [url ...]` | 打开环境窗口（可带启动网址），等待就绪后返回 |
 | `open-batch <id1,id2,...>` | 并发批量打开多个环境（每批 3 个，速度快） |
 | `create <name...> [--count N] [--prefix P]` | 新建环境（指纹克隆自第一个环境；--count 批量、--prefix 命名前缀） |
+| `create <name> --proxy host:port[:user:pass]` | 新建环境并绑定代理（默认 SOCKS5，自动创建代理并关联） |
 | `delete <id\|name>` | 删除环境 |
 | `close <id\|name>` | 关闭环境窗口 |
 | `automa-open <workflowId> [--profile <id>] [--name <name>]` | 打开 Automa 设计器编辑工作流 |
@@ -182,3 +183,4 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 ## 参考
 
 本地 API 详情（认证、接口、CDP 布局、故障排查）见 `references/api.md`。
+带代理创建窗口的完整流程（云端令牌读取、代理创建、proxyId 绑定、验证）见 `references/create-window-with-proxy.md`。

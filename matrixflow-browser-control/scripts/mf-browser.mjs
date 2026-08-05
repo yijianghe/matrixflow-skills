@@ -45,6 +45,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -337,17 +338,23 @@ async function cmdCreate(args) {
   let count = 1;
   let platform = "CUSTOM";
   let prefix = "";
+  let proxySpec = "";
   const names = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--count") count = Number.parseInt(args[++i], 10) || 1;
     else if (args[i] === "--platform") platform = args[++i] || "CUSTOM";
     else if (args[i] === "--prefix") prefix = args[++i] || "";
+    else if (args[i] === "--proxy") proxySpec = args[++i] || "";
     else names.push(args[i]);
   }
   const full = await api("/api/v1/profiles");
   const items = full.data?.items || full.data || [];
   const tpl = items[0]?.fingerprint;
   if (!tpl) throw new Error("没有可用指纹模板：请先在应用里创建至少一个环境");
+  let proxyId = "";
+  if (proxySpec) {
+    proxyId = await createCloudProxy(proxySpec);
+  }
   const usedNames = new Set(items.map((p) => p.name));
   let namesList = names.length ? names.slice(0, count) : [];
   if (namesList.length === 0) {
@@ -374,11 +381,61 @@ async function cmdCreate(args) {
   for (const name of namesList) {
     const r = await api("/api/v1/profiles", {
       method: "POST",
-      body: { name, platform, fingerprint: JSON.parse(JSON.stringify(tpl)) }
+      body: { name, platform, fingerprint: JSON.parse(JSON.stringify(tpl)), ...(proxyId ? { proxyId } : {}) }
     });
-    results.push({ name, ok: true, id: r.data?.id });
+    results.push({ name, ok: true, id: r.data?.id, proxyId: proxyId || undefined });
   }
   console.log(JSON.stringify(results, null, 2));
+}
+
+async function createCloudProxy(spec) {
+  const parts = String(spec || "").split(":");
+  if (parts.length < 2) throw new Error("代理格式应为 host:port[:username:password]");
+  const host = parts[0];
+  const port = Number.parseInt(parts[1], 10);
+  if (!host || !Number.isFinite(port) || port <= 0) throw new Error(`代理格式无效: ${spec}`);
+  const username = parts.length >= 4 ? parts[2] : "";
+  const password = parts.length >= 4 ? parts.slice(3).join(":") : "";
+  const type = /^socks5:\/\//i.test(host)
+    ? "SOCKS5"
+    : /^https:\/\//i.test(host)
+      ? "HTTPS"
+      : /^http:\/\//i.test(host)
+        ? "HTTP"
+        : "SOCKS5";
+  const cleanHost = host.replace(/^(socks5|http|https):\/\//i, "");
+  const token = await resolveCloudToken();
+  if (!token) throw new Error("无法读取云端登录令牌，请先在 MatrixFlow 客户端登录");
+  const res = await fetch("https://browser.lingjingxia.com/api/v1/proxies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ type, host: cleanHost, port, username, password }),
+    signal: AbortSignal.timeout(30_000)
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.success) {
+    throw new Error(`创建代理失败: ${json?.error?.message || res.statusText}`);
+  }
+  return json.data.id;
+}
+
+async function resolveCloudToken() {
+  if (process.platform !== "win32") return "";
+  const require = createRequire(import.meta.url);
+  const candidates = [
+    join(SKILL_DIR, "node_modules", "keytar"),
+    "D:/zhiwenliulanqi/zhiwenliulanqi/MatrixFlow-analysis/extracted/node_modules/keytar",
+    join(process.env.LOCALAPPDATA || "", "@matrixflow", "desktop", "node_modules", "keytar"),
+    join(dirname(process.execPath), "resources", "app", "node_modules", "keytar")
+  ];
+  for (const p of candidates) {
+    try {
+      const keytar = require(p);
+      const v = await keytar.getPassword("MatrixFlow", "matrixflow-auth:accessToken");
+      if (v) return v;
+    } catch {}
+  }
+  return "";
 }
 
 async function cmdDelete(profile) {
@@ -700,6 +757,7 @@ async function main() {
         "  open <profileId|name> [url ...]            open an environment (waits until CDP-ready)",
         "  open-batch <id1,id2,...>                   open many environments concurrently (3 at a time)",
         "  create <name...> [--count N] [--prefix P]  create new environments (fingerprint cloned from first)",
+        "  create <name> --proxy host:port[:user:pass] create environment bound to a proxy (SOCKS5 default)",
         "  delete <profileId|name>                    delete an environment",
         "  close <profileId|name>                     close an environment",
         "  automa-open <workflowId> [--profile <id>]  open the Automa designer for a workflow",
