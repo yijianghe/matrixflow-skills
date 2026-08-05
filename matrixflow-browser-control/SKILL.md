@@ -160,8 +160,10 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 ## 发笔记（发布流程现状）
 
 - **内容生成**：用 `reference` 拉爆款结构（标题/点赞/评论区高频问题）→ 改写种草文案（体验式、不硬广、引导私信）；
-- **表单自动填充（已验证可行）**：打开创作平台发布页 → 切"上传图文" → CDP 直接设置图片文件 → 填入标题与正文（`DOM.setFileInputFiles` + `Input.insertText`）；
-- **已知限制（当前小红书新版创作页）**：发布按钮与"仅自己可见"下拉在新版 UI 里无法用文本选择器稳定定位（发布按钮在该版本创作页无可识别文字标记），误点会把页面切到别的发布模式。当前做法：脚本把表单填好（图片/标题/正文），**"仅自己可见"和最终"发布"两步由人工点击完成**；后续版本迭代再攻克这两个控件（尝试：按坐标 OCR 定位、iframe 内容扫描）。
+- **封面图（推荐原生文字生成图片，已验证 2026-08-05）**：打开创作平台发布页 → 点击「上传图片，或写文字生成图片」→ 选「文字配图」→ 输入封面文案 → 点「生成图片」→ 平台一次生成多套排版，选「基础」→ 点「下一步」直接带入发布表单。全程不需要本地素材/占位图。详见 `references/xhs-publish-native-text-to-image.md`；
+- **表单自动填充（已验证可行）**：标题用 `input[placeholder*="标题"]`（触发 input/change），正文用 `.tiptap.ProseMirror` + `document.execCommand('insertText', ...)`（换行自动成段落），话题直接写在正文末尾（`#话题`）；
+- **可见范围**：在「更多设置」里点「公开可见」下拉 → 选「仅自己可见」（下拉必须用 CDP 真实鼠标坐标点击，`element.click()` 无效）；
+- **发布按钮（已攻克 shadow DOM）**：新版创作页的发布条是自定义元素 `xhs-publish-btn`，按钮在内部 shadow DOM，通过 `document.querySelector('xhs-publish-btn')._sr.querySelector('button.bg-red')` 拿到红色「发布」按钮并点击。发布成功会跳回 `creator.xiaohongshu.com/new/home`。
 
 注意：**新创建的环境没有平台登录态**（会显示“登录后查看”），先用已登录的环境（或让用户在新环境里扫码登录），再执行以上脚本；发布评论前务必让用户确认话术内容。
 
