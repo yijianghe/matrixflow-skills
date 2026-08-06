@@ -65,7 +65,7 @@
 - **窗口批量管理**：批量创建/打开/关闭的界面；
 - **AI 执行过程**：浏览器窗口里 AI 正在浏览/发帖的画面（真人感更强）。
 
-Windows 截图：`powershell -File capture-window.ps1 -OutFile D:\mf-app.png`（截取 MatrixFlow 主窗口）。
+Windows 截图：`powershell -ExecutionPolicy Bypass -File scripts\capture-window.ps1 -OutFile D:\mf-app.png`（截取 MatrixFlow 主窗口）。
 
 ## 六、合规与风控
 
