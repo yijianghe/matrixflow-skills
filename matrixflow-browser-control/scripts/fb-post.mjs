@@ -542,9 +542,13 @@ async function main() {
               const topEl = document.elementFromPoint(cx, cy);
               const hit = topEl === b || b.contains(topEl) || (topEl && topEl.closest && b.contains(topEl.closest('div[role=button]')));
               if (!hit) continue;
-              const fire = (type) => b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, button: 0 }));
-              fire('pointerdown'); fire('mousedown'); b.focus(); fire('pointerup'); fire('mouseup'); fire('click');
-              return JSON.stringify({ x: cx, y: cy });
+              if (attempt === 0) {
+                // 首选：原生 el.click()（实测能触发 React 发布）
+                b.click();
+                return JSON.stringify({ x: cx, y: cy, native: true });
+              }
+              // 兜底：真实鼠标点击
+              return JSON.stringify({ x: cx, y: cy, native: false });
             }
           }
           return null;
@@ -552,7 +556,7 @@ async function main() {
       );
       if (!btn) { await sleep(1500); continue; }
       const b = JSON.parse(btn);
-      await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
+      if (!b.native) await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
       await sleep(4000);
       const check = await ev(
         cdp,
