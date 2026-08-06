@@ -1,22 +1,21 @@
 #!/usr/bin/env node
 /**
- * Facebook 种草帖发布（2026-08-07 新增）
+ * Facebook 种草帖发布 v3（2026-08-07）
  *
  * 用法：
- *   node scripts/fb-post.mjs <profileSpec> --text-file D:\post.txt [--image D:\shot.png]
+ *   node scripts/fb-post.mjs <profileSpec> --text-file D:\post.txt \
+ *     [--image D:\a.png] [--image D:\b.png] ... [--video D:\v.mp4] [--visibility public]
  *
- * 流程（一条 CDP 连接）：
- *   1. 确保在 facebook.com（未登录会自动停在登录页，需先人工登录）
- *   2. 点击首页发布框（分享你的新鲜事 / What's on your mind）
- *   3. 在内容区插入文案（execCommand insertText，换行自动成段落）
- *   4. 可选：--image 注入本地图片（DOM.setFileInputFiles，不弹文件框）
- *   5. 点击「发布 / Post」按钮
- *   6. 验证：发布框关闭且页面出现文案片段
- *
- * 注意：只支持已登录账号；发帖属于公开行为，请先确认文案合规。
+ * v3 要点（吸收实测教训）：
+ *   - 单 CDP 会话完成全部步骤，避免多进程间状态抖动；
+ *   - 逐行输入（Input.insertText + Enter），兼容 Facebook ProseMirror 编辑器；
+ *   - 图片只注入一次；先清空旧附件，避免「无法与已添加的内容一起加入帖子」冲突；
+ *   - 公开可见：打开隐私弹窗 → 点「公开」行 → 点「完成」；
+ *   - 发帖只点“含文案弹窗”里的按钮（双弹窗叠层问题），合成事件 + 真实点击双保险；
+ *   - 文案历史去重（fb-post-history.json）。
  */
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -32,9 +31,9 @@ function resolveUserDataRoot() {
 }
 
 function findProfileDir(profileId) {
-  const profilesRoot = join(resolveUserDataRoot(), "Profiles");
-  if (!existsSync(profilesRoot)) return null;
-  const stack = [profilesRoot];
+  const root = join(resolveUserDataRoot(), "Profiles");
+  if (!existsSync(root)) return null;
+  const stack = [root];
   while (stack.length) {
     const dir = stack.pop();
     let entries;
@@ -46,9 +45,7 @@ function findProfileDir(profileId) {
     for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === profileId && existsSync(join(full, "DevToolsActivePort"))) {
-          return full;
-        }
+        if (entry.name === profileId && existsSync(join(full, "DevToolsActivePort"))) return full;
         stack.push(full);
       }
     }
@@ -90,311 +87,358 @@ async function ev(cdp, expression) {
   return r.result?.value;
 }
 
-async function waitReady(cdp, timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      if ((await ev(cdp, "document.readyState")) === "complete") return true;
-    } catch {}
-    await sleep(300);
-  }
-  return false;
-}
-
 async function clickAt(cdp, x, y) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x - 2, y: y - 2 });
-  await sleep(rand(60, 160));
+  await sleep(rand(60, 150));
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
   await sleep(rand(60, 140));
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 }
 
-async function clickElementByText(cdp, text, opts = {}) {
-  const texts = Array.isArray(text) ? text : [text];
-  const coords = await ev(
-    cdp,
-    `(() => {
-      const targets = ${JSON.stringify(texts)};
-      const candidates = [...document.querySelectorAll('div[role=button],button,span,div')]
-        .filter(e => {
-          const t = (e.textContent || '').trim();
-          const aria = (e.getAttribute('aria-label') || '').trim();
-          if (!targets.some(k => t === k || t.includes(k) || aria === k)) return false;
-          const r = e.getBoundingClientRect();
-          return r.width > 20 && r.height > 8 && r.width < 1200 && r.bottom > 0 && r.top < innerHeight;
-        })
-        .sort((a, b) => {
-          const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-          return (ra.width * ra.height) - (rb.width * rb.height);
-        });
-      const el = candidates[0];
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-    })()`
-  );
-  if (!coords) throw new Error(`找不到目标元素: ${texts.join('/')}`);
-  const { x, y } = JSON.parse(coords);
-  await clickAt(cdp, x + rand(-2, 2), y + rand(-2, 2));
-  return { x, y };
-}
-
-async function setFileInput(cdp, filePath) {
+async function setFiles(cdp, files) {
   const doc = await cdp.send("DOM.getDocument", { depth: -1 });
   const q = await cdp.send("DOM.querySelector", {
     nodeId: doc.root.nodeId,
     selector: 'input[type=file][accept*="image"]',
   });
-  if (!q.nodeId) throw new Error("找不到图片上传输入框 input[type=file]");
-  await cdp.send("DOM.setFileInputFiles", { nodeId: q.nodeId, files: [filePath] });
+  if (!q.nodeId) throw new Error("找不到图片上传输入框");
+  await cdp.send("DOM.setFileInputFiles", { nodeId: q.nodeId, files });
 }
 
 async function countAttachments(cdp) {
-  return (
-    (await ev(
-      cdp,
-      `[...document.querySelectorAll('img')].filter(i => i.naturalWidth > 50).length`
-    )) || 0
-  );
+  return (await ev(cdp, `[...document.querySelectorAll('img')].filter(i => i.naturalWidth > 50).length`)) || 0;
 }
 
-async function removeAllAttachments(cdp) {
-  for (let round = 0; round < 8; round++) {
-    const n = await countAttachments(cdp);
-    if (n <= 0) return true;
-    const btn = await ev(
-      cdp,
-      `(() => {
-        const pick = [...document.querySelectorAll('div[role=button]')].find(e => {
-          const a = (e.getAttribute('aria-label') || '');
-          const r = e.getBoundingClientRect();
-          return a.startsWith('移除') && r.bottom > 0 && r.top < innerHeight && r.width > 10;
-        });
-        if (pick) {
-          const r = pick.getBoundingClientRect();
-          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-        }
-        const editAll = [...document.querySelectorAll('div[role=button]')].find(e => {
-          const a = (e.getAttribute('aria-label') || '');
-          const r = e.getBoundingClientRect();
-          return a === '全部编辑' && r.bottom > 0 && r.top < innerHeight && r.width > 10;
-        });
-        if (!editAll) return null;
-        const r = editAll.getBoundingClientRect();
-        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-      })()`
-    );
-    if (!btn) return false;
-    const { x, y } = JSON.parse(btn);
-    await clickAt(cdp, x, y);
-    await sleep(1500);
+function dedupCheck(text) {
+  const histPath = join(resolveUserDataRoot(), "fb-post-history.json");
+  const hist = existsSync(histPath) ? JSON.parse(readFileSync(histPath, "utf8") || "[]") : [];
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, "");
+  const grams = (s) => {
+    const n = norm(s);
+    const out = new Set();
+    for (let i = 0; i < n.length - 1; i++) out.add(n.slice(i, i + 2));
+    return out;
+  };
+  const mine = grams(text.slice(0, 100));
+  for (const h of hist) {
+    const theirs = grams(h.snippet || "");
+    let common = 0;
+    for (const g of mine) if (theirs.has(g)) common++;
+    const sim = common / Math.max(1, Math.min(mine.size, theirs.size));
+    if (sim > 0.55) throw new Error(`与历史帖相似度过高(${sim.toFixed(2)})，请换角度重写`);
   }
-  return (await countAttachments(cdp)) <= 0;
+  return hist;
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const profileSpec = args[0];
   if (!profileSpec) {
-    console.error("用法: fb-post.mjs <profileSpec> --text-file <path> [--image <path>]");
+    console.error("用法: fb-post.mjs <profileSpec> --text-file <path> [--image ...] [--video ...] [--visibility public]");
     process.exit(1);
   }
   let textFile = "";
-  let image = "";
+  const images = [];
+  let video = "";
+  let visibility = "";
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--text-file") textFile = args[++i] || "";
-    else if (args[i] === "--image") image = args[++i] || "";
+    else if (args[i] === "--image") images.push(args[++i] || "");
+    else if (args[i] === "--video") video = args[++i] || "";
+    else if (args[i] === "--visibility") visibility = args[++i] || "";
   }
   if (!textFile || !existsSync(textFile)) {
-    console.error("请提供存在的 --text-file 文案文件");
+    console.error("请提供存在的 --text-file");
     process.exit(1);
   }
   const text = readFileSync(textFile, "utf8").trim();
-  if (image && !existsSync(image)) {
-    console.error(`图片不存在: ${image}`);
-    process.exit(1);
-  }
+  const probe = text.slice(0, 8);
+  const lines = text.split(/\r?\n/);
+  const files = [...images, ...(video ? [video] : [])].filter((f) => f && existsSync(f));
+  const hist = dedupCheck(text);
 
-  const profileDir = findProfileDir(profileSpec);
-  if (!profileDir) throw new Error(`Profile ${profileSpec} is not running`);
-  const port = Number.parseInt(
-    readFileSync(join(profileDir, "DevToolsActivePort"), "utf8").trim().split(/\r?\n/)[0],
-    10
-  );
+  const dir = findProfileDir(profileSpec);
+  if (!dir) throw new Error(`Profile ${profileSpec} is not running`);
+  const port = Number.parseInt(readFileSync(join(dir, "DevToolsActivePort"), "utf8").trim().split(/\r?\n/)[0], 10);
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(10_000) })).json();
-  const pages = (Array.isArray(targets) ? targets : []).filter((t) => t.type === "page");
-  const page =
-    pages.find((t) => /facebook\.com/.test(t.url || "")) ||
-    pages.find((t) => !/browser-start/.test(t.url || "")) ||
-    pages[0];
-  if (!page) throw new Error("No page target");
+  const page = (Array.isArray(targets) ? targets : []).find((t) => t.type === "page" && /facebook\.com/.test(t.url || ""));
+  if (!page) throw new Error("No facebook page");
   const cdp = makeCdp(page.webSocketDebuggerUrl);
+  const started = Date.now();
   try {
     await cdp.send("Runtime.enable");
     await cdp.send("Page.bringToFront").catch(() => {});
     const url = await ev(cdp, "location.href");
     if (!/facebook\.com/.test(url || "")) {
       await cdp.send("Page.navigate", { url: "https://www.facebook.com/" });
-      await waitReady(cdp);
+      await sleep(5000);
     }
 
-    // 1) 打开发布框
-    const started = Date.now();
-    let composerFound = false;
-    while (Date.now() - started < 20_000) {
-      const opened = await ev(
-        cdp,
-        `document.querySelectorAll('div[contenteditable=true]').length > 0`
-      );
-      if (opened) { composerFound = true; break; }
-      const clicked = await ev(
+    // 1) 打开发布框（无滚动点击）
+    let composerOpen = false;
+    for (let i = 0; i < 20 && !composerOpen; i++) {
+      composerOpen = (await ev(cdp, `document.querySelectorAll('div[contenteditable=true]').length > 0`)) === true;
+      if (composerOpen) break;
+      const trig = await ev(
         cdp,
         `(() => {
-          const el = [...document.querySelectorAll('div,span')].find(e => {
+          const el = [...document.querySelectorAll('div[role=button]')].find(e => {
             const t = (e.textContent || '').trim();
-            if (!t.includes('分享你的新鲜事') && !t.includes('What\\'s on your mind')) return false;
             const r = e.getBoundingClientRect();
-            return r.width > 100 && r.width < 900 && r.height > 20 && r.height < 200 && r.bottom > 0;
+            return t.includes('分享你的新鲜事') && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;
           });
-          if (!el) return false;
+          if (!el) return null;
           const r = el.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
         })()`
       );
-      if (clicked && clicked !== false) {
-        const { x, y } = JSON.parse(clicked);
-        await clickAt(cdp, x, y + rand(-5, 5));
+      if (trig) {
+        const t = JSON.parse(trig);
+        await clickAt(cdp, t.x, t.y + rand(-4, 4));
       }
-      await sleep(900);
-    }
-    if (!composerFound) throw new Error("发布框没有打开（可能未登录或页面结构变化）");
-    await sleep(1200);
-
-    // 1.5) 清理旧附件，避免内容冲突（重复图片会让发帖按钮失效）
-    const beforeAttach = await countAttachments(cdp);
-    if (beforeAttach > 0) {
-      const cleaned = await removeAllAttachments(cdp);
-      console.log(cleaned ? `[fb] 已清理 ${beforeAttach} 个旧附件` : "[fb] 附件清理未完成（尝试继续）");
-      await sleep(800);
-    }
-
-    // 2) 输入文案（幂等：已存在则跳过；编辑区延迟出现时轮询等待）
-    let typed = 0;
-    for (let i = 0; i < 15; i++) {
-      typed = await ev(
-        cdp,
-        `(() => {
-          const els = [...document.querySelectorAll('div[contenteditable=true]')]
-            .map(e => ({ e, r: e.getBoundingClientRect() }))
-            .filter(o => o.r.width > 40 && o.r.height > 10)
-            .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
-          const el = els[0] && els[0].e;
-          if (!el) return 0;
-          const probe = ${JSON.stringify(text.slice(0, 10))};
-          if ((el.textContent || '').includes(probe)) return -1;
-          el.focus();
-          el.innerHTML = '';
-          document.execCommand('insertText', false, ${JSON.stringify(text)});
-          return el.textContent.length;
-        })()`
-      );
-      if (typed !== 0) break;
-      await sleep(800);
-    }
-    if (typed === 0) throw new Error("文案输入失败（找不到可见编辑区）");
-    console.log(typed === -1 ? "[fb] 文案已在编辑框（跳过输入）" : `[fb] 文案已输入 ${typed} 字`);
-    await sleep(rand(600, 1000));
-
-    // 3) 可选：上传截图
-    if (image) {
-      await setFileInput(cdp, image);
-      console.log("[fb] 图片已注入");
-      await sleep(3000);
-    }
-
-    // 4) 等待图片上传完成（有照片预览且无进度条）
-    if (image) {
-      let ready = false;
-      for (let i = 0; i < 20; i++) {
-        const st = await ev(
-          cdp,
-          `(() => {
-            const preview = [...document.querySelectorAll('img')].some(i => (i.alt || '').toLowerCase().includes(${JSON.stringify(
-              String(image).split(/[\\/]/).pop().toLowerCase().replace(/\.[a-z0-9]+$/, '')
-            )}));
-            const busy = document.querySelectorAll('[role=progressbar]').length > 0;
-            return JSON.stringify({ preview, busy });
-          })()`
-        );
-        const s = JSON.parse(st);
-        if (s.preview && !s.busy) { ready = true; break; }
-        await sleep(1000);
-      }
-      console.log(ready ? "[fb] 图片上传完成" : "[fb] 图片上传状态未确认，继续尝试发布");
       await sleep(1000);
     }
+    if (!composerOpen) throw new Error("发布框没有打开");
+    await sleep(1500);
 
-    // 5) 点击发帖：只点“带照片的可见弹窗”里的按钮，点击前不滚动、坐标实时重算
+    // 2) 清空旧附件（避免冲突）
+    for (let i = 0; i < 8; i++) {
+      const n = await countAttachments(cdp);
+      if (n <= 0) break;
+      const rm = await ev(
+        cdp,
+        `(() => {
+          const btn = [...document.querySelectorAll('div[role=button]')].find(e => {
+            const a = (e.getAttribute('aria-label') || '');
+            const r = e.getBoundingClientRect();
+            return a.startsWith('移除') && r.bottom > 0 && r.top < innerHeight && r.width > 10;
+          });
+          if (!btn) return null;
+          const r = btn.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()`
+      );
+      if (!rm) break;
+      const r = JSON.parse(rm);
+      await clickAt(cdp, r.x, r.y);
+      await sleep(1200);
+    }
+
+    // 3) 逐行输入文案
+    const targetPos = await ev(
+      cdp,
+      `(() => {
+        const dialogs = [...document.querySelectorAll('[role=dialog]')]
+          .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+        const target = dialogs.find(d => {
+          const t = (d.innerText || '');
+          const ce = d.querySelector('div[contenteditable=true]');
+          return !t.includes(${JSON.stringify(probe)}) && ce && ce.getBoundingClientRect().width > 50;
+        }) || dialogs.find(d => {
+          const ce = d.querySelector('div[contenteditable=true]');
+          return ce && ce.getBoundingClientRect().width > 50;
+        });
+        if (!target) return null;
+        const ce = target.querySelector('div[contenteditable=true]');
+        ce.focus();
+        ce.innerHTML = '';
+        const r = ce.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()`
+    );
+    if (!targetPos) throw new Error("找不到编辑框");
+    const tp = JSON.parse(targetPos);
+    await clickAt(cdp, tp.x, tp.y);
+    await sleep(400);
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]) {
+        await cdp.send("Input.insertText", { text: lines[i] });
+        await sleep(rand(60, 180));
+      }
+      if (i < lines.length - 1) {
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+        await sleep(rand(60, 140));
+        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+        await sleep(rand(120, 260));
+      }
+    }
+    await sleep(600);
+    const typed = await ev(
+      cdp,
+      `(() => {
+        const el = [...document.querySelectorAll('div[contenteditable=true]')].filter(e => e.getBoundingClientRect().width > 100)[0];
+        return el ? (el.innerText || '').includes(${JSON.stringify(probe)}) : false;
+      })()`
+    );
+    console.log(`[fb] 文案输入: ${typed ? "成功" : "未确认"}`);
+
+    // 4) 关闭不含文案的空发布框（叠层的空壳，此时有文案的才是真框）
+    for (let i = 0; i < 4; i++) {
+      const emptyClose = await ev(
+        cdp,
+        `(() => {
+          const dialogs = [...document.querySelectorAll('[role=dialog]')]
+            .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+          const empty = dialogs.find(o => {
+            const t = (o.innerText || '');
+            const ce = o.querySelector('div[contenteditable=true]');
+            return !t.includes(${JSON.stringify(probe)}) && ce && ce.getBoundingClientRect().width > 50;
+          });
+          if (!empty) return null;
+          const btn = [...empty.querySelectorAll('div[role=button]')].find(b => {
+            const a = (b.getAttribute('aria-label') || '');
+            const r = b.getBoundingClientRect();
+            return a === '关闭编辑工具对话框' && r.bottom > 0 && r.top < innerHeight;
+          });
+          if (!btn) return null;
+          const r = btn.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()`
+      );
+      if (!emptyClose) break;
+      const c = JSON.parse(emptyClose);
+      await clickAt(cdp, c.x, c.y);
+      await sleep(900);
+    }
+
+    // 5) 注入图片（只一次）
+    if (files.length) {
+      await setFiles(cdp, files);
+      console.log(`[fb] 已注入 ${files.length} 个附件`);
+      await sleep(6000);
+    }
+
+    // 6) 公开可见
+    if (visibility === "public") {
+      const privBtn = await ev(
+        cdp,
+        `(() => {
+          const dialogs = [...document.querySelectorAll('[role=dialog]')]
+            .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+          const roots = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probe)}));
+          const btn = (roots.length ? roots.map(r => [...r.querySelectorAll('div[role=button]')]).flat() : [...document.querySelectorAll('div[role=button]')])
+            .find(e => {
+              const a = (e.getAttribute('aria-label') || '');
+              const r = e.getBoundingClientRect();
+              return a.startsWith('编辑隐私设置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
+            });
+          if (!btn) return null;
+          const r = btn.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()`
+      );
+      if (privBtn) {
+        const p = JSON.parse(privBtn);
+        await clickAt(cdp, p.x, p.y);
+        await sleep(1000);
+        // 点「公开」行
+        const pubRow = await ev(
+          cdp,
+          `(() => {
+            const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+            const scope = dlg || document;
+            const el = [...scope.querySelectorAll('div')]
+              .filter(e => {
+                const t = (e.textContent || '').trim();
+                const r = e.getBoundingClientRect();
+                return t.startsWith('公开') && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
+              })
+              .sort((a, b) => {
+                const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+                return (ra.width * ra.height) - (rb.width * rb.height);
+              })[0];
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          })()`
+        );
+        if (pubRow) {
+          const u = JSON.parse(pubRow);
+          await clickAt(cdp, u.x, u.y);
+          await sleep(900);
+        }
+        // 点「完成」
+        const done = await ev(
+          cdp,
+          `(() => {
+            const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+            const scope = dlg || document;
+            const el = [...scope.querySelectorAll('div[role=button]')].find(e => {
+              const a = (e.getAttribute('aria-label') || '');
+              const r = e.getBoundingClientRect();
+              return a.startsWith('完成') && r.bottom > 0 && r.top < innerHeight && r.width > 30;
+            });
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          })()`
+        );
+        if (done) {
+          const d = JSON.parse(done);
+          await clickAt(cdp, d.x, d.y);
+          await sleep(900);
+        }
+      }
+      const after = await ev(
+        cdp,
+        `[...document.querySelectorAll('div[role=button]')].map(b => b.getAttribute('aria-label')||'').find(a => a.startsWith('编辑隐私设置')) || ''`
+      );
+      console.log(`[fb] 可见范围: ${after || "未知"}`);
+    }
+
+    // 7) 发帖：优先点「含文案弹窗」的按钮，合成事件 + 真实点击
     let posted = false;
-    for (let i = 0; i < 8 && !posted; i++) {
-      const coords = await ev(
+    for (let attempt = 0; attempt < 6 && !posted; attempt++) {
+      const btn = await ev(
         cdp,
         `(() => {
           const vis = o => { const r = o.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 30; };
           const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(d => vis(d) && d.getBoundingClientRect().width > 300);
-          const pick = dialogs.filter(d => (d.innerText || '').includes('编辑影音内容') || (d.innerText || '').includes('mf-app'))
+          const pick = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probe)}))
+            .concat(dialogs.filter(d => (d.innerText || '').includes('添加更多内容')))
             .concat(dialogs);
           for (const d of pick) {
-            const btn = [...d.querySelectorAll('div[role=button]')]
-              .filter(b => {
-                const t = (b.textContent || '').trim();
-                const a = (b.getAttribute('aria-label') || '').trim();
-                return (t === '发帖' || t === 'Post' || a === '发帖' || a === 'Post') && vis(b);
+            const b = [...d.querySelectorAll('div[role=button]')]
+              .filter(x => {
+                const t = (x.textContent || '').trim();
+                const a = (x.getAttribute('aria-label') || '').trim();
+                return (t === '发帖' || t === 'Post' || a === '发帖' || a === 'Post') && vis(x) && x.getAttribute('aria-disabled') !== 'true';
               })
               .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
-            if (btn) {
-              const r = btn.getBoundingClientRect();
+            if (b) {
+              const r = b.getBoundingClientRect();
+              const fire = (type) => b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, button: 0 }));
+              fire('pointerdown'); fire('mousedown'); b.focus(); fire('pointerup'); fire('mouseup'); fire('click');
               return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
             }
           }
           return null;
         })()`
       );
-      if (!coords) throw new Error("找不到可点的发帖按钮");
-      const { x, y } = JSON.parse(coords);
-      await clickAt(cdp, x + rand(-2, 2), y + rand(-2, 2));
-      await sleep(4000);
+      if (!btn) {
+        await sleep(2000);
+        continue;
+      }
+      const b = JSON.parse(btn);
+      await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
+      await sleep(5000);
       const check = await ev(
         cdp,
         `(() => {
           const ces = document.querySelectorAll('div[contenteditable=true]').length;
-          const articles = [...document.querySelectorAll('[role=article]')].filter(a => (a.innerText || '').includes(${JSON.stringify(
-            text.slice(0, 10)
-          )})).length;
-          return JSON.stringify({ ces, articles });
+          const arts = [...document.querySelectorAll('[role=article]')].filter(a => (a.innerText || '').includes(${JSON.stringify(probe)})).length;
+          return JSON.stringify({ ces, arts });
         })()`
       );
       const c = JSON.parse(check);
-      if (c.ces === 0 || c.articles > 0) posted = true;
-      else console.log(`[fb] 第 ${i + 1} 次点击未生效，重试`);
+      if (c.ces === 0 || c.arts > 0) posted = true;
+      else console.log(`[fb] 第 ${attempt + 1} 次点击未生效，重试`);
     }
-    if (!posted) throw new Error("多次点击发布未生效，请人工检查页面");
-    console.log("[fb] 已点击发布");
+    if (!posted) throw new Error("多次点击发布未生效");
 
-    // 5) 验证
-    await sleep(5000);
-    const probe = await ev(
-      cdp,
-      `(() => {
-        const stillOpen = document.querySelectorAll('div[contenteditable=true]').length > 0;
-        const fragment = ${JSON.stringify(text.split('\n')[0].slice(0, 12))};
-        const feedHit = (document.body.innerText || '').includes(fragment);
-        return JSON.stringify({ stillOpen, feedHit });
-      })()`
-    );
-    console.log(`[fb] 验证: ${probe}  耗时 ${Math.round((Date.now() - started) / 1000)}s`);
-    const p = JSON.parse(probe);
-    console.log(p.stillOpen && !p.feedHit ? "[fb] 可能未发布成功，请人工检查页面" : "[fb] 发布成功");
+    hist.push({ at: new Date().toISOString(), snippet: text.slice(0, 100) });
+    writeFileSync(join(resolveUserDataRoot(), "fb-post-history.json"), JSON.stringify(hist, null, 2), "utf8");
+    console.log(`[fb] 发布成功，耗时 ${Math.round((Date.now() - started) / 1000)}s，已记录历史`);
   } finally {
     cdp.close();
   }

@@ -49,14 +49,46 @@
 工具是 MatrixFlow 指纹浏览器，想省力的人自己去看看：https://browser.lingjingxia.com
 ```
 
+### 模板 D：双语公开种草帖（2026-08-07 实测发布）
+
+```text
+一个人 = 一个团队：AI 接管了我所有社媒账号
+One person, one team: AI now runs all my social accounts.
+
+以前管 20 个账号：换号要重登、登错窗口发错内容、两个号还被判过"同一人操作"，那阵子真的想放弃。
+Managing 20 accounts used to mean: endless re-logins, posting to the wrong profile,
+and two accounts flagged as "the same person". I almost gave up.
+
+直到我换了 MatrixFlow 指纹浏览器 / Until I switched to MatrixFlow (anti-detect browser):
+• 每个账号一个独立窗口：独立指纹、独立 Cookie、独立 IP
+• Each account gets its own isolated window: separate fingerprint, cookies, even its own proxy IP
+• 关掉重开登录态还在，再也不用反复扫码
+• Logins stay saved after restart — no more scanning QR codes
+• API + AI 自动化：打标签、养号、发帖、评论都能自动跑
+• API + AI automation: tagging, account warm-up, posting and commenting on autopilot
+
+图是我现在的窗口列表——一台电脑，几十个号，互不干扰。
+The screenshot is my actual dashboard — one PC, dozens of accounts, zero chaos.
+https://browser.lingjingxia.com
+
+#指纹浏览器 #多账号运营 #矩阵运营 #跨境电商 #AntidetectBrowser #MultiLogin
+#SocialMediaManagement #MatrixFlow #DigitalMarketing
+```
+
 ## 四、发布流程
 
 1. 确认窗口已登录 Facebook；
 2. 准备文案（用模板改角度，禁止连发同结构）；
 3. 可选：截一张 MatrixFlow 应用主窗口图（多窗口列表最有说服力）；
-4. `node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt [--image D:\mf-app.png]`；
+4. `node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt --image D:\a.png [--image D:\b.png] [--visibility public]`；
 5. 发布后到主页确认可见范围与内容；
 6. 记录发布历史（标题/时间/链接），下次换角度。
+
+**公开可见（重要）**：发布用 `--visibility public`；若已发成「好友」，在帖子 ⋯ → 改可见范围 → 选「公开」→ **点「保存」**（直接关闭弹窗不生效）。
+
+**双语 + 话题**：双语覆盖更广人群；话题标签写在正文末尾，中英文各 2-4 个且与内容相关。
+
+**视频**：`--video D:\xxx.mp4` 注入现成视频；脚本无内置编码器，不会自动生成视频，需要客户提供视频素材。
 
 ## 五、素材截图
 
@@ -74,3 +106,11 @@ Windows 截图：`powershell -ExecutionPolicy Bypass -File scripts\capture-windo
 - 不承诺"保证不封号"，不把指纹浏览器说成"外挂"；
 - 每个账号独立窗口/指纹/代理，控制每日发帖量；
 - 引用他人素材前确认版权，截图不要暴露客户隐私信息。
+
+## 七、已知的 Facebook 网页版坑（2026-08-07 实测）
+
+- **双发布框叠层**：DOM 里有时有两个 composer（一个含内容、一个空的叠在上面），空框会挡住发帖。fb-post.mjs v3 先输入文案，再关掉不含文案的空框；
+- **ProseMirror 编辑器**：`execCommand('insertText')` 可能不生效，v3 用逐行 `Input.insertText` + Enter 换行；
+- **隐私弹窗**：发布框选「公开」后要点「完成」；已发布帖子改可见范围要点「保存」；
+- **重复附件冲突**：同一张图注入两次会报「这项内容无法与已添加的内容一起加入帖子」并禁用发帖，脚本自动清旧附件；
+- **点击被隐藏副本吞掉**：优先用「合成事件 + 不滚动真实坐标点击」组合。

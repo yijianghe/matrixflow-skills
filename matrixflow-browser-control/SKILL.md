@@ -238,30 +238,45 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 用 `scripts/fb-post.mjs` 在已登录的 Facebook 窗口发「种草帖」（软推广，禁止硬广）：
 
 ```bash
-# 纯文字种草帖
-node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt
+# 公开双语种草帖 + 3 张图（2026-08-07 实测发布）
+node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt \
+  --image D:\a.png --image D:\b.png --image D:\c.png --visibility public
 
-# 带截图/图片（自动清理重复附件）
-node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt --image D:\mf-app.png
+# 带视频（需现成视频文件）
+node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt --video D:\v.mp4 --visibility public
 ```
 
 **种草文案规则（让用户为产品买单，但不发广告）**：
 - 第一人称体验式：痛点 → 偶然发现 → 用了之后的变化 → 价值点 → 软引导；
 - 讲具体场景（多账号被关联、登录态混乱、重复劳动），不喊口号；
+- **公开可见**：`--visibility public`（发布框内自动点「公开」+「完成」）；
+- **中英双语**：正文中文 + 英文各一段，末尾加中英话题标签各 2-4 个（`#指纹浏览器 #多账号运营 #AntidetectBrowser #MultiLogin` 等）；
 - 可附真实截图（如 MatrixFlow 应用的多窗口列表），比文字更有说服力；
 - 结尾放官网即可（如 browser.lingjingxia.com），不夸大、不承诺效果；
 - 每篇换角度，禁止同一账号连续两篇同结构同话术（参考小红书文案铁律）。
 
 **脚本自动处理**：
-- 打开首页发布框 → 输入文案（幂等，已有草稿跳过）→ 可选注入图片 → 点「发帖/Post」→ 验证发布框关闭且页面出现文案；
+- 打开首页发布框 → 逐行输入文案（ProseMirror 兼容）→ 注入图片/视频 → 设公开 → 点「发帖/Post」→ 验证发布框关闭且页面出现文案；
 - 自动清理重复附件：Facebook 网页版对重复图片会报「这项内容无法与已添加的内容一起加入帖子」并禁用发帖按钮，脚本会先移除旧附件；
-- 发帖按钮支持中文「发帖」/ 英文「Post」，点击前不滚动、坐标实时重算、失败自动重试；
-- 附件清理工具：`node scripts/fb-fix-attachments.mjs <profileId> [目标附件数]`。
+- 自动关闭叠层空发布框（Facebook 会渲染两个 composer，空的叠在上面会挡住发帖）；
+- 发帖按钮中文「发帖」/ 英文「Post」，合成事件 + 真实坐标点击双保险、失败自动重试；
+- 文案历史去重：`<userData>/fb-post-history.json`，相似度 >0.55 拒绝二发。
+
+**配套工具**：
+- `fb-set-public.mjs <profileId>`：把当前发布框/帖子可见范围改成「公开」；
+- `fb-type-prose.mjs <profileId> <textFile>`：逐行输入（换行=Enter）；
+- `fb-attach.mjs <profileId> <file1> [file2...]`：注入图片/视频；
+- `fb-synthetic-post.mjs <profileId> [probeText]`：合成事件点发帖；
+- `fb-click-element.mjs <profileId> <selector>`：不滚动精确点击（解决误点隐藏副本）；
+- `fb-fix-attachments.mjs <profileId> [目标附件数]`：清理重复附件；
+- `capture-window.ps1`：截取 MatrixFlow 应用主窗口做种草配图。
 
 **已知限制**：
 - 必须已登录（未登录会停在登录页）；
-- 发布可见范围默认跟随账号设置（好友/公开），需要指定时先人工选择；
-- Facebook 对自动化有风控，一天发帖量不要大，文案要自然；配图素材建议用 MatrixFlow 应用主窗口截图（多窗口列表最有说服力）。
+- 视频需要现成视频文件（脚本无内置编码器，不会自动生成视频）；
+- 已发布帖子改可见范围：帖子 ⋯ → 改可见范围 → 选「公开」→ 必须点「保存」（关闭弹窗不生效）；
+- Facebook 对自动化有风控，一天发帖量不要大，文案要自然；配图素材建议用 MatrixFlow 应用主窗口截图（多窗口列表最有说服力）；
+- 详细踩坑记录（双发布框叠层/ProseMirror/隐私弹窗/重复附件冲突）见 `references/facebook-leadgen.md`。
 
 种草文案模板与更多行业话术见 `references/facebook-leadgen.md`。
 
