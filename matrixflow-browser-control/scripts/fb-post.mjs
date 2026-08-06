@@ -519,7 +519,7 @@ async function main() {
       for (let i = 0; i < 30; i++) {
         n = await countImagesInVisible(cdp);
         if (n >= files.length) break;
-        await sleep(1000);
+        await sleep(600);
       }
       console.log(`[fb] 可见层图片预览: ${n}/${files.length}`);
       // 传图后 Facebook 可能新开「照片编辑器」弹窗：重新锁定带图的那一层
@@ -631,7 +631,7 @@ async function main() {
       } else {
         await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
       }
-      await sleep(6000);
+      await sleep(4000);
       // 判定：带图弹窗消失 = 已提交发布（不要再重试，避免误发重复帖）
       const photoGone = (await ev(
         cdp,
@@ -657,7 +657,7 @@ async function main() {
     if (visibility === "public") {
       // 先回到主页确认帖子，再改公开
       await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
-      await sleep(6000);
+      await sleep(5000);
       const pubOk = await setPostPublic(cdp, probe);
       console.log(`[fb] 已发布帖改公开: ${pubOk ? "完成（请到主页确认）" : "未完成（请人工点 ⋯ → 公开 → 保存）"}`);
     }
