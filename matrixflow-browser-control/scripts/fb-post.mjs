@@ -440,7 +440,9 @@ async function setComposerPublic(cdp, probe) {
           return (ra.width * ra.height) - (rb.width * rb.height);
         })[0];
       if (!el) return null;
-      const r = el.getBoundingClientRect();
+      // 关键：点「公开」行内的单选圆点（实测点整行不生效，点 radio 才生效）
+      const radio = el.querySelector('input[type=radio]');
+      const r = radio ? radio.getBoundingClientRect() : el.getBoundingClientRect();
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
     })()`
   );
@@ -731,7 +733,7 @@ async function main() {
       } else {
         await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
       }
-      await sleep(4000);
+      await sleep(7000);
       // 判定：带图弹窗消失 = 已提交发布（不要再重试，避免误发重复帖）
       const photoGone = (await ev(
         cdp,
@@ -743,10 +745,28 @@ async function main() {
           return !d;
         })()`
       )) === true;
-      if (photoGone) {
+      const composerGone = (await ev(
+        cdp,
+        `[...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]')).length === 0`
+      )) === true;
+      if (photoGone || composerGone) {
         posted = true;
-        console.log("[fb] 带图弹窗已关闭，视为提交成功");
+        console.log("[fb] 发布框已关闭，视为提交成功");
         break;
+      }
+      // 未确认时去个人主页核实（防止误报失败导致重发）
+      if (attempt === 0) {
+        await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
+        await sleep(5000);
+        const confirmed = (await ev(
+          cdp,
+          `[...document.querySelectorAll('[role=article]')].some(a => (a.innerText || '').includes(${JSON.stringify(probe)}))`
+        )) === true;
+        if (confirmed) {
+          posted = true;
+          console.log("[fb] 已在个人主页确认发布");
+          break;
+        }
       }
       else console.log(`[fb] 第 ${attempt + 1} 次点击未生效，重试`);
     }

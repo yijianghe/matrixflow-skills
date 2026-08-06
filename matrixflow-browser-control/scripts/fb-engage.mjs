@@ -166,64 +166,68 @@ async function main() {
     }
     report.push(`搜索话题「${finalTopic}」浏览 ${browsed} 屏`);
 
-    // 3) 加好友（好友推荐页点一次「添加好友」）
+    // 3) 加好友（好友推荐页连点多个「加好友/添加好友」）
     await cdp.send("Page.navigate", { url: "https://www.facebook.com/friends/suggestions/" });
     await sleep(rand(4000, 6000));
-    let friendAdded = false;
-    for (let round = 0; round < 4 && !friendAdded; round++) {
-      const addBtn = await ev(
+    let friendAdded = 0;
+    const friendTarget = Math.max(3, Math.min(5, likesTarget + 1));
+    for (let round = 0; round < 10 && friendAdded < friendTarget; round++) {
+      const btn = await ev(
         cdp,
         `(() => {
           const el = [...document.querySelectorAll('div[role=button]')].find(e => {
             const t = (e.textContent || '').trim();
             const r = e.getBoundingClientRect();
-            return (t === '添加好友' || t === 'Add Friend') && r.bottom > 0 && r.top < innerHeight && r.width > 40;
+            return (t === '加好友' || t === '添加好友' || t === 'Add Friend') && r.bottom > 0 && r.top < innerHeight && r.width > 30 && r.height > 15;
           });
           if (!el) return null;
           const r = el.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
         })()`
       );
-      if (addBtn) {
-        const b = JSON.parse(addBtn);
-        await clickAt(cdp, b.x, b.y);
-        await sleep(rand(1500, 2500));
-        friendAdded = true;
+      if (btn) {
+        const b = JSON.parse(btn);
+        await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
+        await sleep(rand(1200, 2200));
+        friendAdded++;
+        console.log(`[engage] 加好友 ${friendAdded}/${friendTarget}`);
       } else {
         await scrollRandom(cdp);
       }
     }
-    report.push(friendAdded ? "已发出 1 个好友请求" : "未找到可添加的好友");
+    report.push(`加好友 ${friendAdded} 个`);
 
-    // 4) 加入相关小组（搜索小组 → 加入一个）
+    // 4) 加入相关小组（搜索小组 → 连点加入，至少 5 个）
     const groupUrl = `https://www.facebook.com/search/groups?q=${encodeURIComponent(finalTopic)}`;
     await cdp.send("Page.navigate", { url: groupUrl });
     await sleep(rand(4500, 6500));
-    let groupJoined = false;
-    for (let round = 0; round < 4 && !groupJoined; round++) {
-      const joinBtn = await ev(
+    let groupJoined = 0;
+    const groupTarget = 5;
+    for (let round = 0; round < 12 && groupJoined < groupTarget; round++) {
+      const btn = await ev(
         cdp,
         `(() => {
           const el = [...document.querySelectorAll('div[role=button]')].find(e => {
             const t = (e.textContent || '').trim();
             const r = e.getBoundingClientRect();
-            return (t === '加入群组' || t === 'Join Group' || t === '加入小组') && r.bottom > 0 && r.top < innerHeight && r.width > 40;
+            return (t === '加入群组' || t === '加入小组' || t === 'Join Group' || t === '加入') && r.bottom > 0 && r.top < innerHeight && r.width > 30 && r.height > 15;
           });
           if (!el) return null;
           const r = el.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
         })()`
       );
-      if (joinBtn) {
-        const b = JSON.parse(joinBtn);
-        await clickAt(cdp, b.x, b.y);
-        await sleep(rand(1500, 2500));
-        groupJoined = true;
+      if (btn) {
+        const b = JSON.parse(btn);
+        await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
+        await sleep(rand(1200, 2200));
+        groupJoined++;
+        console.log(`[engage] 加入小组 ${groupJoined}/${groupTarget}`);
       } else {
         await scrollRandom(cdp);
       }
     }
-    report.push(groupJoined ? "已加入 1 个相关小组" : "未找到可加入的小组");
+    report.push(`加入小组 ${groupJoined} 个`);
 
     console.log(`[engage] 完成: ${report.join(" | ")}`);
   } finally {
