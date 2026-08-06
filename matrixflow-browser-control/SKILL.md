@@ -240,11 +240,23 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 ```bash
 # 公开双语种草帖 + 3 张图（2026-08-07 实测发布）
 node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt \
-  --image D:\a.png --image D:\b.png --image D:\c.png --visibility public
+  --image D:\a.png --image D:\b.png --image D:\c.png --visibility public \
+  [--random-location]     # 随机带定位；或 --location "成都"
 
 # 带视频（需现成视频文件）
 node scripts/fb-post.mjs <profileId> --text-file D:\fb-post.txt --video D:\v.mp4 --visibility public
+
+# 群组发帖：搜索小组 → 进入 → 群内发
+node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
+  --text-file D:\fb-post.txt --image D:\a.png
+# 或直达群组: --group https://www.facebook.com/groups/xxxx
 ```
+
+**v4 关键修正（2026-08-07）**：
+- **先传图、后写文案**：之前先写文案再传图，Facebook 编辑器会把文案吞掉；
+- **发布前校验**：文案探针在编辑框 + 图片预览数达标，缺哪个补哪个，全绿才点发布；
+- **随机定位**：`--random-location` 从城市列表随机选一个（成都/上海/北京/深圳/广州/杭州/重庆/Sydney/Melbourne/Singapore/Kuala Lumpur），定位选择失败会自动撤销，绝不导航离开发布页；
+- **--no-post 模式**：只把图文/定位/公开准备好、不点发布（供人工最后确认时使用）。
 
 **种草文案规则（让用户为产品买单，但不发广告）**：
 - 第一人称体验式：痛点 → 偶然发现 → 用了之后的变化 → 价值点 → 软引导；

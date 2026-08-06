@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * Facebook 种草帖发布 v3（2026-08-07）
+ * Facebook 种草帖发布 v4（2026-08-07）
  *
  * 用法：
  *   node scripts/fb-post.mjs <profileSpec> --text-file D:\post.txt \
- *     [--image D:\a.png] [--image D:\b.png] ... [--video D:\v.mp4] [--visibility public]
+ *     [--image D:\a.png] [--image D:\b.png] ... [--video D:\v.mp4] \
+ *     [--visibility public] [--location "成都"] [--random-location]
  *
- * v3 要点（吸收实测教训）：
- *   - 单 CDP 会话完成全部步骤，避免多进程间状态抖动；
- *   - 逐行输入（Input.insertText + Enter），兼容 Facebook ProseMirror 编辑器；
- *   - 图片只注入一次；先清空旧附件，避免「无法与已添加的内容一起加入帖子」冲突；
- *   - 公开可见：打开隐私弹窗 → 点「公开」行 → 点「完成」；
- *   - 发帖只点“含文案弹窗”里的按钮（双弹窗叠层问题），合成事件 + 真实点击双保险；
- *   - 文案历史去重（fb-post-history.json）。
+ * v4 关键修正（吸收实测反馈）：
+ *   1. **先传图、后写文案**（之前先写文案再传图，Facebook 编辑器会把文案吞掉）；
+ *   2. **发布前校验**：文案探针在编辑框 + 图片预览数达标，缺哪个补哪个；
+ *   3. 提速：上传等待用轮询、减少固定 sleep；
+ *   4. 可选随机定位（--random-location 或 --location "地点"）；
+ *   5. 历史去重 + 公开可见 + 叠层空发布框清理（沿用 v3）。
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const RANDOM_LOCATIONS = ["成都", "上海", "北京", "深圳", "广州", "杭州", "重庆", "Sydney", "Melbourne", "Singapore", "Kuala Lumpur"];
 
 function resolveUserDataRoot() {
   if (process.env.MF_USER_DATA) return process.env.MF_USER_DATA;
@@ -89,9 +90,9 @@ async function ev(cdp, expression) {
 
 async function clickAt(cdp, x, y) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x - 2, y: y - 2 });
-  await sleep(rand(60, 150));
+  await sleep(rand(50, 120));
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await sleep(rand(60, 140));
+  await sleep(rand(50, 120));
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 }
 
@@ -107,6 +108,134 @@ async function setFiles(cdp, files) {
 
 async function countAttachments(cdp) {
   return (await ev(cdp, `[...document.querySelectorAll('img')].filter(i => i.naturalWidth > 50).length`)) || 0;
+}
+
+async function typeText(cdp, text) {
+  // 真实点击聚焦 → execCommand insertText 整段插入（实测：带图后的标题框只吃 execCommand）
+  const pos = await ev(
+    cdp,
+    `(() => {
+      const els = [...document.querySelectorAll('div[contenteditable=true]')]
+        .map(e => ({ e, r: e.getBoundingClientRect() }))
+        .filter(o => o.r.width > 100 && o.r.height > 20)
+        .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
+      const el = els[0] && els[0].e;
+      if (!el) return null;
+      el.focus();
+      el.innerHTML = '';
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (!pos) return false;
+  const p = JSON.parse(pos);
+  await clickAt(cdp, p.x, p.y);
+  await sleep(300);
+  await ev(
+    cdp,
+    `(() => {
+      const els = [...document.querySelectorAll('div[contenteditable=true]')]
+        .map(e => ({ e, r: e.getBoundingClientRect() }))
+        .filter(o => o.r.width > 40)
+        .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
+      const el = els[0] && els[0].e;
+      if (!el) return false;
+      el.focus();
+      el.innerHTML = '';
+      const sel = getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return document.execCommand('insertText', false, ${JSON.stringify(text)});
+    })()`
+  );
+  await sleep(400);
+  return true;
+}
+
+async function setLocation(cdp, location) {
+  // 点「签到」→ 搜索地点 → 选第一个结果
+  const locBtn = await ev(
+    cdp,
+    `(() => {
+      const el = [...document.querySelectorAll('div[role=button]')].find(e => {
+        const a = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return (a === '签到' || a === 'Check in' || a === '位置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
+      });
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (!locBtn) return false;
+  const b = JSON.parse(locBtn);
+  await clickAt(cdp, b.x, b.y);
+  await sleep(900);
+  // 搜索框输入地点（用 input 事件，绝不回车提交，避免导航离开发布页）
+  const typed = await ev(
+    cdp,
+    `(() => {
+      const input = [...document.querySelectorAll('input')].find(i => {
+        const ph = (i.getAttribute('placeholder') || '');
+        const r = i.getBoundingClientRect();
+        return (ph.includes('搜索') || ph.includes('地点') || ph.includes('位置')) && r.bottom > 0 && r.top < innerHeight && r.width > 100;
+      });
+      if (!input) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(location)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`
+  );
+  if (!typed) return false;
+  await sleep(1200);
+  const option = await ev(
+    cdp,
+    `(() => {
+      const items = [...document.querySelectorAll('div[role=button],li,[role=option]')].filter(e => {
+        const t = (e.textContent || '').trim();
+        const r = e.getBoundingClientRect();
+        return t.includes(${JSON.stringify(location)}) && r.bottom > 0 && r.top < innerHeight && r.width > 80 && r.height > 20;
+      }).sort((a, b) => {
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        return (ra.width * ra.height) - (rb.width * rb.height);
+      });
+      const el = items[0];
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (!option) return false;
+  const o = JSON.parse(option);
+  await clickAt(cdp, o.x, o.y);
+  await sleep(600);
+  // 验证定位标签确实出现在发布框（防止误点成全局搜索导航）
+  const chip = await ev(
+    cdp,
+    `(() => {
+      const loc = [...document.querySelectorAll('div[role=button],span,div')].some(e => {
+        const t = (e.textContent || '').trim();
+        const r = e.getBoundingClientRect();
+        return t === ${JSON.stringify(location)} && r.width > 20 && r.bottom > 0 && r.top < innerHeight;
+      });
+      const stillComposer = document.querySelectorAll('div[contenteditable=true]').length > 0;
+      return JSON.stringify({ loc, stillComposer });
+    })()`
+  );
+  const c = chip ? JSON.parse(chip) : { loc: false, stillComposer: false };
+  if (!c.loc || !c.stillComposer) {
+    // 没选上就撤销：按 Esc 关闭定位面板，不导航
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await sleep(500);
+    return false;
+  }
+  return true;
 }
 
 function dedupCheck(text) {
@@ -134,18 +263,24 @@ async function main() {
   const args = process.argv.slice(2);
   const profileSpec = args[0];
   if (!profileSpec) {
-    console.error("用法: fb-post.mjs <profileSpec> --text-file <path> [--image ...] [--video ...] [--visibility public]");
+    console.error("用法: fb-post.mjs <profileSpec> --text-file <path> [--image ...] [--video ...] [--visibility public] [--location 地点 | --random-location]");
     process.exit(1);
   }
   let textFile = "";
   const images = [];
   let video = "";
   let visibility = "";
+  let location = "";
+  let randomLocation = false;
+  let noPost = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--text-file") textFile = args[++i] || "";
     else if (args[i] === "--image") images.push(args[++i] || "");
     else if (args[i] === "--video") video = args[++i] || "";
     else if (args[i] === "--visibility") visibility = args[++i] || "";
+    else if (args[i] === "--location") location = args[++i] || "";
+    else if (args[i] === "--random-location") randomLocation = true;
+    else if (args[i] === "--no-post") noPost = true;
   }
   if (!textFile || !existsSync(textFile)) {
     console.error("请提供存在的 --text-file");
@@ -153,9 +288,9 @@ async function main() {
   }
   const text = readFileSync(textFile, "utf8").trim();
   const probe = text.slice(0, 8);
-  const lines = text.split(/\r?\n/);
   const files = [...images, ...(video ? [video] : [])].filter((f) => f && existsSync(f));
   const hist = dedupCheck(text);
+  const finalLocation = randomLocation ? RANDOM_LOCATIONS[Math.floor(Math.random() * RANDOM_LOCATIONS.length)] : location;
 
   const dir = findProfileDir(profileSpec);
   if (!dir) throw new Error(`Profile ${profileSpec} is not running`);
@@ -171,12 +306,12 @@ async function main() {
     const url = await ev(cdp, "location.href");
     if (!/facebook\.com/.test(url || "")) {
       await cdp.send("Page.navigate", { url: "https://www.facebook.com/" });
-      await sleep(5000);
+      await sleep(4000);
     }
 
-    // 1) 打开发布框（无滚动点击）
+    // 1) 打开发布框
     let composerOpen = false;
-    for (let i = 0; i < 20 && !composerOpen; i++) {
+    for (let i = 0; i < 15 && !composerOpen; i++) {
       composerOpen = (await ev(cdp, `document.querySelectorAll('div[contenteditable=true]').length > 0`)) === true;
       if (composerOpen) break;
       const trig = await ev(
@@ -196,10 +331,10 @@ async function main() {
         const t = JSON.parse(trig);
         await clickAt(cdp, t.x, t.y + rand(-4, 4));
       }
-      await sleep(1000);
+      await sleep(800);
     }
     if (!composerOpen) throw new Error("发布框没有打开");
-    await sleep(1500);
+    await sleep(1200);
 
     // 2) 清空旧附件（避免冲突）
     for (let i = 0; i < 8; i++) {
@@ -221,58 +356,53 @@ async function main() {
       if (!rm) break;
       const r = JSON.parse(rm);
       await clickAt(cdp, r.x, r.y);
-      await sleep(1200);
+      await sleep(1000);
     }
 
-    // 3) 逐行输入文案
-    const targetPos = await ev(
-      cdp,
-      `(() => {
-        const dialogs = [...document.querySelectorAll('[role=dialog]')]
-          .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-        const target = dialogs.find(d => {
-          const t = (d.innerText || '');
-          const ce = d.querySelector('div[contenteditable=true]');
-          return !t.includes(${JSON.stringify(probe)}) && ce && ce.getBoundingClientRect().width > 50;
-        }) || dialogs.find(d => {
-          const ce = d.querySelector('div[contenteditable=true]');
-          return ce && ce.getBoundingClientRect().width > 50;
-        });
-        if (!target) return null;
-        const ce = target.querySelector('div[contenteditable=true]');
-        ce.focus();
-        ce.innerHTML = '';
-        const r = ce.getBoundingClientRect();
-        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-      })()`
-    );
-    if (!targetPos) throw new Error("找不到编辑框");
-    const tp = JSON.parse(targetPos);
-    await clickAt(cdp, tp.x, tp.y);
-    await sleep(400);
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i]) {
-        await cdp.send("Input.insertText", { text: lines[i] });
-        await sleep(rand(60, 180));
+    // 3) 先传图/视频（重要：先图后文，避免编辑器吞文案）
+    if (files.length) {
+      await setFiles(cdp, files);
+      console.log(`[fb] 已注入 ${files.length} 个附件，等待上传...`);
+      let previews = 0;
+      for (let i = 0; i < 30; i++) {
+        previews = await countAttachments(cdp);
+        if (previews >= files.length) break;
+        await sleep(1000);
       }
-      if (i < lines.length - 1) {
-        await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-        await sleep(rand(60, 140));
-        await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-        await sleep(rand(120, 260));
-      }
+      console.log(`[fb] 图片预览数: ${previews}/${files.length}`);
+      await sleep(500);
     }
-    await sleep(600);
-    const typed = await ev(
-      cdp,
-      `(() => {
-        const el = [...document.querySelectorAll('div[contenteditable=true]')].filter(e => e.getBoundingClientRect().width > 100)[0];
-        return el ? (el.innerText || '').includes(${JSON.stringify(probe)}) : false;
-      })()`
-    );
-    console.log(`[fb] 文案输入: ${typed ? "成功" : "未确认"}`);
 
-    // 4) 关闭不含文案的空发布框（叠层的空壳，此时有文案的才是真框）
+    // 4) 后写文案 + 校验
+    let typedOk = false;
+    for (let attempt = 0; attempt < 3 && !typedOk; attempt++) {
+      await typeText(cdp, text);
+      typedOk = (await ev(
+        cdp,
+        `(() => {
+          const els = [...document.querySelectorAll('div[contenteditable=true]')];
+          return els.some(e => (e.innerText || '').includes(${JSON.stringify(probe)}));
+        })()`
+      )) === true;
+      if (!typedOk) console.log(`[fb] 文案校验未通过，第 ${attempt + 1} 次重输`);
+    }
+    if (!typedOk) throw new Error("文案输入失败（多次重试仍不出现）");
+    console.log(`[fb] 文案已确认在编辑框`);
+
+    // 5) 图文都在校验（缺图补图）
+    const textThere = true;
+    const needAttach = files.length;
+    let imgCount = await countAttachments(cdp);
+    if (needAttach && imgCount < needAttach) {
+      console.log(`[fb] 图片不足(${imgCount}/${needAttach})，重新注入`);
+      await setFiles(cdp, files);
+      await sleep(3000);
+      imgCount = await countAttachments(cdp);
+    }
+    console.log(`[fb] 发布前校验：文案=${textThere ? "有" : "无"} 图片=${imgCount}/${needAttach || "无"}`);
+    if (needAttach && imgCount < 1) throw new Error("图片上传失败，终止发布");
+
+    // 6) 关闭不含文案的空发布框（叠层）
     for (let i = 0; i < 4; i++) {
       const emptyClose = await ev(
         cdp,
@@ -298,17 +428,16 @@ async function main() {
       if (!emptyClose) break;
       const c = JSON.parse(emptyClose);
       await clickAt(cdp, c.x, c.y);
-      await sleep(900);
+      await sleep(800);
     }
 
-    // 5) 注入图片（只一次）
-    if (files.length) {
-      await setFiles(cdp, files);
-      console.log(`[fb] 已注入 ${files.length} 个附件`);
-      await sleep(6000);
+    // 7) 定位（可选）
+    if (finalLocation) {
+      const okLoc = await setLocation(cdp, finalLocation);
+      console.log(`[fb] 定位「${finalLocation}」: ${okLoc ? "成功" : "失败（跳过）"}`);
     }
 
-    // 6) 公开可见
+    // 8) 公开可见
     if (visibility === "public") {
       const privBtn = await ev(
         cdp,
@@ -330,8 +459,7 @@ async function main() {
       if (privBtn) {
         const p = JSON.parse(privBtn);
         await clickAt(cdp, p.x, p.y);
-        await sleep(1000);
-        // 点「公开」行
+        await sleep(900);
         const pubRow = await ev(
           cdp,
           `(() => {
@@ -355,9 +483,8 @@ async function main() {
         if (pubRow) {
           const u = JSON.parse(pubRow);
           await clickAt(cdp, u.x, u.y);
-          await sleep(900);
+          await sleep(800);
         }
-        // 点「完成」
         const done = await ev(
           cdp,
           `(() => {
@@ -376,24 +503,25 @@ async function main() {
         if (done) {
           const d = JSON.parse(done);
           await clickAt(cdp, d.x, d.y);
-          await sleep(900);
+          await sleep(800);
         }
       }
-      const after = await ev(
-        cdp,
-        `[...document.querySelectorAll('div[role=button]')].map(b => b.getAttribute('aria-label')||'').find(a => a.startsWith('编辑隐私设置')) || ''`
-      );
-      console.log(`[fb] 可见范围: ${after || "未知"}`);
     }
 
-    // 7) 发帖：优先点「含文案弹窗」的按钮，合成事件 + 真实点击
+    // 9) 发帖（合成事件 + 真实点击，只点含文案弹窗的按钮）
+    if (noPost) {
+      console.log(`[fb] 内容已全部就绪（--no-post 模式），跳过发布点击`);
+      return;
+    }
     let posted = false;
     for (let attempt = 0; attempt < 6 && !posted; attempt++) {
       const btn = await ev(
         cdp,
         `(() => {
           const vis = o => { const r = o.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 30; };
-          const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(d => vis(d) && d.getBoundingClientRect().width > 300);
+          const dialogs = [...document.querySelectorAll('[role=dialog]')]
+            .filter(d => vis(d) && d.getBoundingClientRect().width > 300)
+            .reverse(); // 最后渲染的在最上面，优先点
           const pick = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probe)}))
             .concat(dialogs.filter(d => (d.innerText || '').includes('添加更多内容')))
             .concat(dialogs);
@@ -407,21 +535,25 @@ async function main() {
               .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
             if (b) {
               const r = b.getBoundingClientRect();
+              const cx = r.x + r.width / 2;
+              const cy = r.y + r.height / 2;
+              if (cx < 0 || cy < 0 || cy > innerHeight) continue;
+              // 坐标落点验证：排除被覆盖/隐藏副本
+              const topEl = document.elementFromPoint(cx, cy);
+              const hit = topEl === b || b.contains(topEl) || (topEl && topEl.closest && b.contains(topEl.closest('div[role=button]')));
+              if (!hit) continue;
               const fire = (type) => b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, button: 0 }));
               fire('pointerdown'); fire('mousedown'); b.focus(); fire('pointerup'); fire('mouseup'); fire('click');
-              return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+              return JSON.stringify({ x: cx, y: cy });
             }
           }
           return null;
         })()`
       );
-      if (!btn) {
-        await sleep(2000);
-        continue;
-      }
+      if (!btn) { await sleep(1500); continue; }
       const b = JSON.parse(btn);
       await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
-      await sleep(5000);
+      await sleep(4000);
       const check = await ev(
         cdp,
         `(() => {
@@ -438,7 +570,7 @@ async function main() {
 
     hist.push({ at: new Date().toISOString(), snippet: text.slice(0, 100) });
     writeFileSync(join(resolveUserDataRoot(), "fb-post-history.json"), JSON.stringify(hist, null, 2), "utf8");
-    console.log(`[fb] 发布成功，耗时 ${Math.round((Date.now() - started) / 1000)}s，已记录历史`);
+    console.log(`[fb] 发布成功（定位：${finalLocation || "无"}），耗时 ${Math.round((Date.now() - started) / 1000)}s，已记录历史`);
   } finally {
     cdp.close();
   }
