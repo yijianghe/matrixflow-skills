@@ -398,6 +398,99 @@ async function setPostPublic(cdp, probeText) {
   return true;
 }
 
+// 发布前：在发布框内把可见范围设为「公开」（作用在带图弹窗上，点完再验证）
+async function setComposerPublic(cdp, probe) {
+  const priv = await ev(
+    cdp,
+    `(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')]
+        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+      const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
+        || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}))
+        || dialogs[0];
+      if (!d) return null;
+      const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
+        const a = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return a.startsWith('编辑隐私设置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
+      });
+      if (!btn) return null;
+      btn.setAttribute('data-mf-privc', '1');
+      const r = btn.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (!priv) return false;
+  const p = JSON.parse(priv);
+  await clickAt(cdp, p.x, p.y);
+  await sleep(1000);
+  const pubRow = await ev(
+    cdp,
+    `(() => {
+      const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+      const scope = dlg || document;
+      const el = [...scope.querySelectorAll('div')]
+        .filter(e => {
+          const t = (e.textContent || '').trim();
+          const r = e.getBoundingClientRect();
+          return t.startsWith('公开') && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
+        })
+        .sort((a, b) => {
+          const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+          return (ra.width * ra.height) - (rb.width * rb.height);
+        })[0];
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (pubRow) {
+    const u = JSON.parse(pubRow);
+    await clickAt(cdp, u.x, u.y);
+    await sleep(800);
+  }
+  const done = await ev(
+    cdp,
+    `(() => {
+      const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+      const scope = dlg || document;
+      const el = [...scope.querySelectorAll('div[role=button]')].find(e => {
+        const a = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return a.startsWith('完成') && r.bottom > 0 && r.top < innerHeight && r.width > 30;
+      });
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (done) {
+    const d = JSON.parse(done);
+    await clickAt(cdp, d.x, d.y);
+    await sleep(800);
+  }
+  // 验证发布框可见范围
+  const label = await ev(
+    cdp,
+    `(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')]
+        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+      const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
+        || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}));
+      if (!d) return '';
+      const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
+        const a = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return a.startsWith('编辑隐私设置') && r.width > 20;
+      });
+      return btn ? (btn.getAttribute('aria-label') || '') : '';
+    })()`
+  );
+  const ok = /公开|Public/.test(label || "");
+  console.log(`[fb] 发布前可见范围: ${label || "未知"} ${ok ? "✅ 公开" : "❌ 未公开"}`);
+  return ok;
+}
+
 function dedupCheck(text) {
   const histPath = join(resolveUserDataRoot(), "fb-post-history.json");
   const hist = existsSync(histPath) ? JSON.parse(readFileSync(histPath, "utf8") || "[]") : [];
@@ -468,6 +561,8 @@ async function main() {
   try {
     await cdp.send("Runtime.enable");
     await cdp.send("Page.bringToFront").catch(() => {});
+    // 全程拦截系统文件选择对话框（防止弹出 Windows 文件窗口）
+    await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true });
     const url = await ev(cdp, "location.href");
     if (!/facebook\.com/.test(url || "")) {
       await cdp.send("Page.navigate", { url: "https://www.facebook.com/" });
@@ -589,6 +684,11 @@ async function main() {
       console.log("[fb] 内容已就绪（--no-post），跳过发布");
       return;
     }
+    // 7.1) 发布前设公开（先设好再点发布，不再发完再改）
+    if (visibility === "public") {
+      const pubOk = await setComposerPublic(cdp, probe);
+      if (!pubOk) console.log("[fb] 发布前设公开失败，继续发布（发布后需人工检查）");
+    }
     let posted = false;
     for (let attempt = 0; attempt < 6 && !posted; attempt++) {
       // 发布前复检（定位等步骤可能改变叠层）
@@ -653,14 +753,9 @@ async function main() {
     if (!posted) throw new Error("多次点击发布未生效");
     console.log(`[fb] 发布成功，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
 
-    // 8) 发布后自动改公开
-    if (visibility === "public") {
-      // 先回到主页确认帖子，再改公开
-      await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
-      await sleep(5000);
-      const pubOk = await setPostPublic(cdp, probe);
-      console.log(`[fb] 已发布帖改公开: ${pubOk ? "完成（请到主页确认）" : "未完成（请人工点 ⋯ → 公开 → 保存）"}`);
-    }
+    // 8) 发布后清理：关掉可能残留的系统对话框/空弹窗
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
 
     hist.push({ at: new Date().toISOString(), snippet: text.slice(0, 100) });
     writeFileSync(join(resolveUserDataRoot(), "fb-post-history.json"), JSON.stringify(hist, null, 2), "utf8");
