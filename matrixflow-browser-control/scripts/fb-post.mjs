@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 /**
- * Facebook 种草帖发布 v4（2026-08-07）
+ * Facebook 种草帖发布 v5（2026-08-07）
  *
  * 用法：
  *   node scripts/fb-post.mjs <profileSpec> --text-file D:\post.txt \
  *     [--image D:\a.png] [--image D:\b.png] ... [--video D:\v.mp4] \
- *     [--visibility public] [--location "成都"] [--random-location]
+ *     [--visibility public] [--location "成都" | --random-location] [--no-post]
  *
- * v4 关键修正（吸收实测反馈）：
- *   1. **先传图、后写文案**（之前先写文案再传图，Facebook 编辑器会把文案吞掉）；
- *   2. **发布前校验**：文案探针在编辑框 + 图片预览数达标，缺哪个补哪个；
- *   3. 提速：上传等待用轮询、减少固定 sleep；
- *   4. 可选随机定位（--random-location 或 --location "地点"）；
- *   5. 历史去重 + 公开可见 + 叠层空发布框清理（沿用 v3）。
+ * v5 核心修正（解决「要么只有图片、要么只有文字」）：
+ *   Facebook 会把发布框渲染成多层叠窗（真实 + 隐藏副本），如果图片进了一
+ *   层、文字进了另一层，发出来就是分离的。v5 把【传图、写文、校验、发布】
+ *   全部锁定在同一个“可见弹窗”里：
+ *     1) 用 elementFromPoint 找到真正在顶层的那层发布框；
+ *     2) 图片注入到该层的 input，文案写到该层的编辑框；
+ *     3) 发布前校验：同一层里 图片预览数 和 文案探针 必须同时存在；
+ *     4) 发布后自动把可见范围改成「公开」（帖子 ⋯ → 公开 → 保存）；
+ *     5) 定位：选完必须在该层出现定位标签，失败自动撤销并关面板。
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
@@ -58,8 +61,15 @@ function makeCdp(wsUrl) {
   const ws = new WebSocket(wsUrl);
   let nextId = 0;
   const pending = new Map();
+  const handlers = new Map();
   ws.onmessage = (event) => {
     const msg = JSON.parse(String(event.data));
+    if (msg.method && handlers.has(msg.method)) {
+      const list = handlers.get(msg.method);
+      handlers.delete(msg.method);
+      for (const h of list) h(msg.params);
+      return;
+    }
     if (msg.id && pending.has(msg.id)) {
       const { resolve, reject } = pending.get(msg.id);
       pending.delete(msg.id);
@@ -79,7 +89,16 @@ function makeCdp(wsUrl) {
       ws.send(JSON.stringify({ id, method, params }));
     });
   }
-  return { ws, send, close: () => { try { ws.close(); } catch {} } };
+  return {
+    ws,
+    send,
+    once: (method, handler) => {
+      const list = handlers.get(method) || [];
+      list.push(handler);
+      handlers.set(method, list);
+    },
+    close: () => { try { ws.close(); } catch {} },
+  };
 }
 
 async function ev(cdp, expression) {
@@ -96,49 +115,110 @@ async function clickAt(cdp, x, y) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 }
 
-async function setFiles(cdp, files) {
+// 找到真正在顶层的发布框（elementFromPoint 命中自身才算可见）
+async function visibleDialogSelector(cdp, probeText) {
+  return await ev(
+    cdp,
+    `(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')]
+        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+      const ranked = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probeText || "")}))
+        .concat(dialogs);
+      for (const d of ranked) {
+        // 可见层判定：控件可点（pointer-events 非 none），排除隐藏副本
+        const probeBtn = [...d.querySelectorAll('div[role=button]')].find(b => {
+          const r = b.getBoundingClientRect();
+          return r.width > 20 && r.height > 10 && r.bottom > 0 && r.top < innerHeight;
+        });
+        if (probeBtn && getComputedStyle(probeBtn).pointerEvents === 'none') continue;
+        const r = d.getBoundingClientRect();
+        const cx = r.x + r.width / 2;
+        const cy = Math.min(r.y + 100, r.bottom - 20);
+        const topEl = document.elementFromPoint(cx, cy);
+        if (!topEl || (!d.contains(topEl) && topEl !== d)) continue;
+        d.setAttribute('data-mf-vis', '1');
+        return true;
+      }
+      return false;
+    })()`
+  );
+}
+
+async function attachViaChooser(cdp, files) {
+  // 点击可见层的「照片/视频」→ 拦截系统文件选择器 → 注入（图片进顶层弹窗）
+  await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true });
+  const chooser = new Promise((resolve) => cdp.once("Page.fileChooserOpened", resolve));
+  const btn = await ev(
+    cdp,
+    `(() => {
+      const el = [...document.querySelectorAll('[data-mf-vis="1"] div[role=button]')].find(e => {
+        const a = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return (a === '照片/视频' || a === 'Photo/video' || a === '附加照片或视频') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
+      });
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (!btn) return false;
+  const b = JSON.parse(btn);
+  await clickAt(cdp, b.x, b.y);
+  const event = await Promise.race([
+    chooser,
+    new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+  ]);
+  if (!event || !event.backendNodeId) return false;
+  await cdp.send("DOM.setFileInputFiles", { nodeId: event.backendNodeId, files });
+  return true;
+}
+
+async function setFilesInVisible(cdp, files) {
   const doc = await cdp.send("DOM.getDocument", { depth: -1 });
   const q = await cdp.send("DOM.querySelector", {
     nodeId: doc.root.nodeId,
-    selector: 'input[type=file][accept*="image"]',
+    selector: '[data-mf-vis="1"] input[type=file][accept*="image"], input[type=file][accept*="image"]',
   });
   if (!q.nodeId) throw new Error("找不到图片上传输入框");
   await cdp.send("DOM.setFileInputFiles", { nodeId: q.nodeId, files });
 }
 
-async function countAttachments(cdp) {
-  return (await ev(cdp, `[...document.querySelectorAll('img')].filter(i => i.naturalWidth > 50).length`)) || 0;
+async function countImagesInVisible(cdp) {
+  return (
+    (await ev(
+      cdp,
+      `[...document.querySelectorAll('[data-mf-vis="1"] img')].filter(i => i.naturalWidth > 200).length`
+    )) || 0
+  );
 }
 
-async function typeText(cdp, text) {
-  // 真实点击聚焦 → execCommand insertText 整段插入（实测：带图后的标题框只吃 execCommand）
+// 在「带图弹窗」里真实点击文字框 → execCommand 输入（实测唯一能图文同框的方式）
+async function typeTextInPhotoEditor(cdp, text) {
   const pos = await ev(
     cdp,
     `(() => {
-      const els = [...document.querySelectorAll('div[contenteditable=true]')]
-        .map(e => ({ e, r: e.getBoundingClientRect() }))
-        .filter(o => o.r.width > 100 && o.r.height > 20)
-        .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
-      const el = els[0] && els[0].e;
-      if (!el) return null;
-      el.focus();
-      el.innerHTML = '';
-      const r = el.getBoundingClientRect();
+      const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+        const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+        return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+      });
+      if (!d) return null;
+      const ce = [...d.querySelectorAll('div[contenteditable=true]')]
+        .filter(e => e.getBoundingClientRect().width > 40)
+        .sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height)[0];
+      if (!ce) return null;
+      ce.setAttribute('data-mf-photo-ce', '1');
+      const r = ce.getBoundingClientRect();
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
     })()`
   );
   if (!pos) return false;
   const p = JSON.parse(pos);
-  await clickAt(cdp, p.x, p.y);
+  await clickAt(cdp, p.x, p.y); // 真实点击聚焦（不滚动），ProseMirror 才能接受输入
   await sleep(300);
   await ev(
     cdp,
     `(() => {
-      const els = [...document.querySelectorAll('div[contenteditable=true]')]
-        .map(e => ({ e, r: e.getBoundingClientRect() }))
-        .filter(o => o.r.width > 40)
-        .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
-      const el = els[0] && els[0].e;
+      const el = document.querySelector('[data-mf-photo-ce]');
       if (!el) return false;
       el.focus();
       el.innerHTML = '';
@@ -155,12 +235,28 @@ async function typeText(cdp, text) {
   return true;
 }
 
-async function setLocation(cdp, location) {
-  // 点「签到」→ 搜索地点 → 选第一个结果
-  const locBtn = await ev(
+async function photoDialogState(cdp, probe) {
+  const s = await ev(
     cdp,
     `(() => {
-      const el = [...document.querySelectorAll('div[role=button]')].find(e => {
+      const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+        const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+        return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+      });
+      if (!d) return null;
+      const imgs = [...d.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+      const hasText = [...d.querySelectorAll('div[contenteditable=true]')].some(e => (e.innerText || '').includes(${JSON.stringify(probe)}));
+      return JSON.stringify({ imgs, hasText });
+    })()`
+  );
+  return s ? JSON.parse(s) : { imgs: 0, hasText: false };
+}
+
+async function setLocationVisible(cdp, location) {
+  const btn = await ev(
+    cdp,
+    `(() => {
+      const el = [...document.querySelectorAll('[data-mf-vis="1"] div[role=button]')].find(e => {
         const a = (e.getAttribute('aria-label') || '');
         const r = e.getBoundingClientRect();
         return (a === '签到' || a === 'Check in' || a === '位置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
@@ -170,18 +266,17 @@ async function setLocation(cdp, location) {
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
     })()`
   );
-  if (!locBtn) return false;
-  const b = JSON.parse(locBtn);
+  if (!btn) return false;
+  const b = JSON.parse(btn);
   await clickAt(cdp, b.x, b.y);
-  await sleep(900);
-  // 搜索框输入地点（用 input 事件，绝不回车提交，避免导航离开发布页）
+  await sleep(1000);
   const typed = await ev(
     cdp,
     `(() => {
       const input = [...document.querySelectorAll('input')].find(i => {
         const ph = (i.getAttribute('placeholder') || '');
         const r = i.getBoundingClientRect();
-        return (ph.includes('搜索') || ph.includes('地点') || ph.includes('位置')) && r.bottom > 0 && r.top < innerHeight && r.width > 100;
+        return (ph.includes('搜索') || ph.includes('地点')) && r.bottom > 0 && r.top < innerHeight && r.width > 100;
       });
       if (!input) return false;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -192,7 +287,7 @@ async function setLocation(cdp, location) {
     })()`
   );
   if (!typed) return false;
-  await sleep(1200);
+  await sleep(1500);
   const option = await ev(
     cdp,
     `(() => {
@@ -210,30 +305,95 @@ async function setLocation(cdp, location) {
       return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
     })()`
   );
-  if (!option) return false;
+  if (!option) {
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    return false;
+  }
   const o = JSON.parse(option);
   await clickAt(cdp, o.x, o.y);
-  await sleep(600);
-  // 验证定位标签确实出现在发布框（防止误点成全局搜索导航）
-  const chip = await ev(
+  await sleep(800);
+  const ok = (await ev(
     cdp,
     `(() => {
-      const loc = [...document.querySelectorAll('div[role=button],span,div')].some(e => {
-        const t = (e.textContent || '').trim();
-        const r = e.getBoundingClientRect();
-        return t === ${JSON.stringify(location)} && r.width > 20 && r.bottom > 0 && r.top < innerHeight;
-      });
-      const stillComposer = document.querySelectorAll('div[contenteditable=true]').length > 0;
-      return JSON.stringify({ loc, stillComposer });
+      const chip = [...document.querySelectorAll('[data-mf-vis="1"] span, [data-mf-vis="1"] div')].some(e => (e.textContent || '').trim() === ${JSON.stringify(location)});
+      const panel = [...document.querySelectorAll('[role=dialog]')].some(d => (d.innerText || '').includes('搜索地点'));
+      return JSON.stringify({ chip, panelStillOpen: panel });
     })()`
-  );
-  const c = chip ? JSON.parse(chip) : { loc: false, stillComposer: false };
-  if (!c.loc || !c.stillComposer) {
-    // 没选上就撤销：按 Esc 关闭定位面板，不导航
+  ));
+  const r = ok ? JSON.parse(ok) : { chip: false, panelStillOpen: false };
+  if (!r.chip || r.panelStillOpen) {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await sleep(500);
     return false;
+  }
+  return true;
+}
+
+async function setPostPublic(cdp, probeText) {
+  // 发布后把帖子改成公开：定位帖子 → 编辑分享对象 → 公开 → 保存
+  const arts = await ev(
+    cdp,
+    `(() => {
+      const a = [...document.querySelectorAll('[role=article]')].find(x => {
+        const t = (x.innerText || '');
+        const r = x.getBoundingClientRect();
+        return t.includes(${JSON.stringify(probeText)}) && r.bottom > -50 && r.top < innerHeight + 50;
+      });
+      if (!a) return null;
+      a.scrollIntoView({ block: 'center' });
+      const ar = a.getBoundingClientRect();
+      const btn = [...document.querySelectorAll('div[role=button]')].find(e => {
+        const a2 = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return a2 === '编辑分享对象' && r.bottom > 0 && r.top < innerHeight && Math.abs(r.top - ar.top) < 180;
+      });
+      if (!btn) return null;
+      btn.setAttribute('data-mf-pub-post', '1');
+      const r = btn.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (!arts) return false;
+  const p = JSON.parse(arts);
+  await clickAt(cdp, p.x, p.y);
+  await sleep(1200);
+  // 选公开（第一个 radio 通常是公开）
+  const radio = await ev(
+    cdp,
+    `(() => {
+      const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+      const r = dlg ? dlg.querySelector('input[type=radio]') : null;
+      if (!r) return null;
+      r.setAttribute('data-mf-pub-radio', '1');
+      const rr = r.getBoundingClientRect();
+      return JSON.stringify({ x: rr.x + rr.width / 2, y: rr.y + rr.height / 2 });
+    })()`
+  );
+  if (radio) {
+    const r2 = JSON.parse(radio);
+    await clickAt(cdp, r2.x, r2.y);
+    await sleep(800);
+  }
+  const save = await ev(
+    cdp,
+    `(() => {
+      const el = [...document.querySelectorAll('div[role=button]')].find(e => {
+        const a = (e.getAttribute('aria-label') || '');
+        const r = e.getBoundingClientRect();
+        return a === '保存隐私分享对象选择并关闭对话框' && r.bottom > 0 && r.top < innerHeight && r.width > 30;
+      });
+      if (!el) return null;
+      el.setAttribute('data-mf-pub-save', '1');
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`
+  );
+  if (save) {
+    const s = JSON.parse(save);
+    await clickAt(cdp, s.x, s.y);
+    await sleep(1000);
   }
   return true;
 }
@@ -263,7 +423,7 @@ async function main() {
   const args = process.argv.slice(2);
   const profileSpec = args[0];
   if (!profileSpec) {
-    console.error("用法: fb-post.mjs <profileSpec> --text-file <path> [--image ...] [--video ...] [--visibility public] [--location 地点 | --random-location]");
+    console.error("用法: fb-post.mjs <profileSpec> --text-file <path> [--image ...] [--video ...] [--visibility public] [--location 地点 | --random-location] [--no-post]");
     process.exit(1);
   }
   let textFile = "";
@@ -288,7 +448,12 @@ async function main() {
   }
   const text = readFileSync(textFile, "utf8").trim();
   const probe = text.slice(0, 8);
-  const files = [...images, ...(video ? [video] : [])].filter((f) => f && existsSync(f));
+  // 实测：一次传多张图会触发 FB「内容冲突」并禁用发帖；每帖稳定使用 1 张图
+  let files = [...images, ...(video ? [video] : [])].filter((f) => f && existsSync(f));
+  if (files.length > 1) {
+    console.log(`[fb] 检测到 ${files.length} 个附件，为稳定图文同框，本帖使用第 1 个: ${files[0].split(/[\\/]/).pop()}`);
+    files = files.slice(0, 1);
+  }
   const hist = dedupCheck(text);
   const finalLocation = randomLocation ? RANDOM_LOCATIONS[Math.floor(Math.random() * RANDOM_LOCATIONS.length)] : location;
 
@@ -336,245 +501,170 @@ async function main() {
     if (!composerOpen) throw new Error("发布框没有打开");
     await sleep(1200);
 
-    // 2) 清空旧附件（避免冲突）
-    for (let i = 0; i < 8; i++) {
-      const n = await countAttachments(cdp);
-      if (n <= 0) break;
-      const rm = await ev(
-        cdp,
-        `(() => {
-          const btn = [...document.querySelectorAll('div[role=button]')].find(e => {
-            const a = (e.getAttribute('aria-label') || '');
-            const r = e.getBoundingClientRect();
-            return a.startsWith('移除') && r.bottom > 0 && r.top < innerHeight && r.width > 10;
-          });
-          if (!btn) return null;
-          const r = btn.getBoundingClientRect();
-          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-        })()`
-      );
-      if (!rm) break;
-      const r = JSON.parse(rm);
-      await clickAt(cdp, r.x, r.y);
-      await sleep(1000);
-    }
+    // 2) 锁定顶层可见发布框
+    const vis = await visibleDialogSelector(cdp, "");
+    if (!vis) throw new Error("找不到可见发布框");
+    console.log("[fb] 已锁定顶层发布框");
 
-    // 3) 先传图/视频（重要：先图后文，避免编辑器吞文案）
+    // 3) 先传图（注入到可见层）
     if (files.length) {
-      await setFiles(cdp, files);
-      console.log(`[fb] 已注入 ${files.length} 个附件，等待上传...`);
-      let previews = 0;
+      const viaChooser = await attachViaChooser(cdp, files);
+      if (!viaChooser) {
+        await setFilesInVisible(cdp, files);
+        console.log(`[fb] 已通过输入框注入 ${files.length} 个附件`);
+      } else {
+        console.log(`[fb] 已通过照片按钮注入 ${files.length} 个附件（顶层弹窗）`);
+      }
+      let n = 0;
       for (let i = 0; i < 30; i++) {
-        previews = await countAttachments(cdp);
-        if (previews >= files.length) break;
+        n = await countImagesInVisible(cdp);
+        if (n >= files.length) break;
         await sleep(1000);
       }
-      console.log(`[fb] 图片预览数: ${previews}/${files.length}`);
+      console.log(`[fb] 可见层图片预览: ${n}/${files.length}`);
+      // 传图后 Facebook 可能新开「照片编辑器」弹窗：重新锁定带图的那一层
+      const reVis = await ev(
+        cdp,
+        `(() => {
+          const baseName = ${JSON.stringify(files[0].split(/[\\/]/).pop().toLowerCase())};
+          const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+            const imgs = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 300 || (i.alt || '').toLowerCase().includes(baseName)).length;
+            return imgs >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+          });
+          if (!d) return false;
+          d.setAttribute('data-mf-vis', '1');
+          return true;
+        })()`
+      );
+      if (reVis) console.log("[fb] 已切换到带图弹窗");
+      // 清理多余附件（避免内容冲突）
+      for (let i = 0; i < 6; i++) {
+        const cur = await countImagesInVisible(cdp);
+        if (cur <= files.length) break;
+        const rm = await ev(
+          cdp,
+          `(() => {
+            const btn = [...document.querySelectorAll('[data-mf-vis="1"] div[role=button]')].find(e => {
+              const a = (e.getAttribute('aria-label') || '');
+              const r = e.getBoundingClientRect();
+              return a.startsWith('移除') && r.bottom > 0 && r.top < innerHeight && r.width > 10;
+            });
+            if (!btn) return null;
+            const r = btn.getBoundingClientRect();
+            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          })()`
+        );
+        if (!rm) break;
+        const r = JSON.parse(rm);
+        await clickAt(cdp, r.x, r.y);
+        await sleep(1000);
+      }
       await sleep(500);
     }
 
-    // 4) 后写文案 + 校验
+    // 4) 后写文案（写入「带图弹窗」的文字框）
     let typedOk = false;
     for (let attempt = 0; attempt < 3 && !typedOk; attempt++) {
-      await typeText(cdp, text);
-      typedOk = (await ev(
-        cdp,
-        `(() => {
-          const els = [...document.querySelectorAll('div[contenteditable=true]')];
-          return els.some(e => (e.innerText || '').includes(${JSON.stringify(probe)}));
-        })()`
-      )) === true;
-      if (!typedOk) console.log(`[fb] 文案校验未通过，第 ${attempt + 1} 次重输`);
+      await typeTextInPhotoEditor(cdp, text);
+      const st = await photoDialogState(cdp, probe);
+      typedOk = st.hasText;
     }
-    if (!typedOk) throw new Error("文案输入失败（多次重试仍不出现）");
-    console.log(`[fb] 文案已确认在编辑框`);
+    if (!typedOk) throw new Error("文案写入带图弹窗失败");
+    console.log("[fb] 文案已写入带图弹窗");
 
-    // 5) 图文都在校验（缺图补图）
-    const textThere = true;
-    const needAttach = files.length;
-    let imgCount = await countAttachments(cdp);
-    if (needAttach && imgCount < needAttach) {
-      console.log(`[fb] 图片不足(${imgCount}/${needAttach})，重新注入`);
-      await setFiles(cdp, files);
-      await sleep(3000);
-      imgCount = await countAttachments(cdp);
-    }
-    console.log(`[fb] 发布前校验：文案=${textThere ? "有" : "无"} 图片=${imgCount}/${needAttach || "无"}`);
-    if (needAttach && imgCount < 1) throw new Error("图片上传失败，终止发布");
+    // 5) 发布前校验：同一个「带图弹窗」里 图文都在
+    const st5 = await photoDialogState(cdp, probe);
+    console.log(`[fb] 发布前校验（带图弹窗）：文案=${st5.hasText ? "有" : "无"} 图片=${st5.imgs}/${files.length || "无"}`);
+    if (!st5.hasText) throw new Error("发布前校验失败：文案不在带图弹窗");
+    if (files.length && st5.imgs < 1) throw new Error("发布前校验失败：图片不在带图弹窗");
 
-    // 6) 关闭不含文案的空发布框（叠层）
-    for (let i = 0; i < 4; i++) {
-      const emptyClose = await ev(
-        cdp,
-        `(() => {
-          const dialogs = [...document.querySelectorAll('[role=dialog]')]
-            .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-          const empty = dialogs.find(o => {
-            const t = (o.innerText || '');
-            const ce = o.querySelector('div[contenteditable=true]');
-            return !t.includes(${JSON.stringify(probe)}) && ce && ce.getBoundingClientRect().width > 50;
-          });
-          if (!empty) return null;
-          const btn = [...empty.querySelectorAll('div[role=button]')].find(b => {
-            const a = (b.getAttribute('aria-label') || '');
-            const r = b.getBoundingClientRect();
-            return a === '关闭编辑工具对话框' && r.bottom > 0 && r.top < innerHeight;
-          });
-          if (!btn) return null;
-          const r = btn.getBoundingClientRect();
-          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-        })()`
-      );
-      if (!emptyClose) break;
-      const c = JSON.parse(emptyClose);
-      await clickAt(cdp, c.x, c.y);
-      await sleep(800);
-    }
-
-    // 7) 定位（可选）
+    // 6) 定位（同一层，失败安全撤销）
     if (finalLocation) {
-      const okLoc = await setLocation(cdp, finalLocation);
-      console.log(`[fb] 定位「${finalLocation}」: ${okLoc ? "成功" : "失败（跳过）"}`);
+      const locOk = await setLocationVisible(cdp, finalLocation);
+      console.log(`[fb] 定位「${finalLocation}」: ${locOk ? "成功" : "失败（已撤销，不影响发布）"}`);
     }
 
-    // 8) 公开可见
-    if (visibility === "public") {
-      const privBtn = await ev(
-        cdp,
-        `(() => {
-          const dialogs = [...document.querySelectorAll('[role=dialog]')]
-            .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-          const roots = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probe)}));
-          const btn = (roots.length ? roots.map(r => [...r.querySelectorAll('div[role=button]')]).flat() : [...document.querySelectorAll('div[role=button]')])
-            .find(e => {
-              const a = (e.getAttribute('aria-label') || '');
-              const r = e.getBoundingClientRect();
-              return a.startsWith('编辑隐私设置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
-            });
-          if (!btn) return null;
-          const r = btn.getBoundingClientRect();
-          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-        })()`
-      );
-      if (privBtn) {
-        const p = JSON.parse(privBtn);
-        await clickAt(cdp, p.x, p.y);
-        await sleep(900);
-        const pubRow = await ev(
-          cdp,
-          `(() => {
-            const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
-            const scope = dlg || document;
-            const el = [...scope.querySelectorAll('div')]
-              .filter(e => {
-                const t = (e.textContent || '').trim();
-                const r = e.getBoundingClientRect();
-                return t.startsWith('公开') && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
-              })
-              .sort((a, b) => {
-                const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-                return (ra.width * ra.height) - (rb.width * rb.height);
-              })[0];
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-          })()`
-        );
-        if (pubRow) {
-          const u = JSON.parse(pubRow);
-          await clickAt(cdp, u.x, u.y);
-          await sleep(800);
-        }
-        const done = await ev(
-          cdp,
-          `(() => {
-            const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
-            const scope = dlg || document;
-            const el = [...scope.querySelectorAll('div[role=button]')].find(e => {
-              const a = (e.getAttribute('aria-label') || '');
-              const r = e.getBoundingClientRect();
-              return a.startsWith('完成') && r.bottom > 0 && r.top < innerHeight && r.width > 30;
-            });
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-          })()`
-        );
-        if (done) {
-          const d = JSON.parse(done);
-          await clickAt(cdp, d.x, d.y);
-          await sleep(800);
-        }
-      }
-    }
-
-    // 9) 发帖（合成事件 + 真实点击，只点含文案弹窗的按钮）
+    // 7) 发布
     if (noPost) {
-      console.log(`[fb] 内容已全部就绪（--no-post 模式），跳过发布点击`);
+      console.log("[fb] 内容已就绪（--no-post），跳过发布");
       return;
     }
     let posted = false;
     for (let attempt = 0; attempt < 6 && !posted; attempt++) {
+      // 发布前复检（定位等步骤可能改变叠层）
+      const stNow = await photoDialogState(cdp, probe);
+      console.log(`[fb] 发布前复检（第 ${attempt + 1} 次）：文案=${stNow.hasText ? "有" : "无"} 图片=${stNow.imgs}`);
+      if (files.length && stNow.imgs < 1) {
+        if (attempt < 2) {
+          console.log("[fb] 图片丢失，重新注入");
+          await setFilesInVisible(cdp, files);
+          await sleep(3000);
+        }
+        continue;
+      }
       const btn = await ev(
         cdp,
         `(() => {
-          const vis = o => { const r = o.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 30; };
-          const dialogs = [...document.querySelectorAll('[role=dialog]')]
-            .filter(d => vis(d) && d.getBoundingClientRect().width > 300)
-            .reverse(); // 最后渲染的在最上面，优先点
-          const pick = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probe)}))
-            .concat(dialogs.filter(d => (d.innerText || '').includes('添加更多内容')))
-            .concat(dialogs);
-          for (const d of pick) {
-            const b = [...d.querySelectorAll('div[role=button]')]
-              .filter(x => {
-                const t = (x.textContent || '').trim();
-                const a = (x.getAttribute('aria-label') || '').trim();
-                return (t === '发帖' || t === 'Post' || a === '发帖' || a === 'Post') && vis(x) && x.getAttribute('aria-disabled') !== 'true';
-              })
-              .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
-            if (b) {
-              const r = b.getBoundingClientRect();
-              const cx = r.x + r.width / 2;
-              const cy = r.y + r.height / 2;
-              if (cx < 0 || cy < 0 || cy > innerHeight) continue;
-              // 坐标落点验证：排除被覆盖/隐藏副本
-              const topEl = document.elementFromPoint(cx, cy);
-              const hit = topEl === b || b.contains(topEl) || (topEl && topEl.closest && b.contains(topEl.closest('div[role=button]')));
-              if (!hit) continue;
-              if (attempt === 0) {
-                // 首选：原生 el.click()（实测能触发 React 发布）
-                b.click();
-                return JSON.stringify({ x: cx, y: cy, native: true });
-              }
-              // 兜底：真实鼠标点击
-              return JSON.stringify({ x: cx, y: cy, native: false });
-            }
-          }
-          return null;
+          const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+            const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+            return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+          });
+          if (!d) return null;
+          const vis2 = o => { const r = o.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 30; };
+          const b = [...d.querySelectorAll('div[role=button]')]
+            .filter(x => {
+              const t = (x.textContent || '').trim();
+              const a = (x.getAttribute('aria-label') || '').trim();
+              return (t === '发帖' || t === 'Post' || a === '发帖' || a === 'Post') && vis2(x) && x.getAttribute('aria-disabled') !== 'true';
+            })
+            .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
+          if (!b) return null;
+          b.setAttribute('data-mf-go', '1');
+          const r = b.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
         })()`
       );
       if (!btn) { await sleep(1500); continue; }
       const b = JSON.parse(btn);
-      if (!b.native) await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
-      await sleep(4000);
-      const check = await ev(
+      if (attempt === 0) {
+        await ev(cdp, `(() => { const el = document.querySelector('[data-mf-go="1"]'); if (el) el.click(); return true; })()`);
+      } else {
+        await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
+      }
+      await sleep(6000);
+      // 判定：带图弹窗消失 = 已提交发布（不要再重试，避免误发重复帖）
+      const photoGone = (await ev(
         cdp,
         `(() => {
-          const ces = document.querySelectorAll('div[contenteditable=true]').length;
-          const arts = [...document.querySelectorAll('[role=article]')].filter(a => (a.innerText || '').includes(${JSON.stringify(probe)})).length;
-          return JSON.stringify({ ces, arts });
+          const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+            const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+            return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+          });
+          return !d;
         })()`
-      );
-      const c = JSON.parse(check);
-      if (c.ces === 0 || c.arts > 0) posted = true;
+      )) === true;
+      if (photoGone) {
+        posted = true;
+        console.log("[fb] 带图弹窗已关闭，视为提交成功");
+        break;
+      }
       else console.log(`[fb] 第 ${attempt + 1} 次点击未生效，重试`);
     }
     if (!posted) throw new Error("多次点击发布未生效");
+    console.log(`[fb] 发布成功，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
+
+    // 8) 发布后自动改公开
+    if (visibility === "public") {
+      // 先回到主页确认帖子，再改公开
+      await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
+      await sleep(6000);
+      const pubOk = await setPostPublic(cdp, probe);
+      console.log(`[fb] 已发布帖改公开: ${pubOk ? "完成（请到主页确认）" : "未完成（请人工点 ⋯ → 公开 → 保存）"}`);
+    }
 
     hist.push({ at: new Date().toISOString(), snippet: text.slice(0, 100) });
     writeFileSync(join(resolveUserDataRoot(), "fb-post-history.json"), JSON.stringify(hist, null, 2), "utf8");
-    console.log(`[fb] 发布成功（定位：${finalLocation || "无"}），耗时 ${Math.round((Date.now() - started) / 1000)}s，已记录历史`);
+    console.log("[fb] 已记录发布历史");
   } finally {
     cdp.close();
   }
