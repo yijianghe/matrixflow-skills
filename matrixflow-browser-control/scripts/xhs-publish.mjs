@@ -559,6 +559,7 @@ async function main() {
     if (args[i] === "--image") opt.image = args[++i];
     if (args[i] === "--image-dir") opt.imageDir = args[++i];
     if (args[i] === "--draft") opt.draft = true;
+    if (args[i] === "--confirm-public") opt.confirmPublic = true;
     if (args[i] === "--schedule") opt.schedule = args[++i];
     if (args[i] === "--industry") opt.industry = args[++i];
   }
@@ -579,8 +580,8 @@ async function main() {
   if (opt.template !== "random" && !TITLES.includes(opt.template)) {
     console.warn(`模板名"${opt.template}"不在已知列表，将尝试模糊匹配`);
   }
-  if (opt.visibility === "公开可见" && !opt.draft) {
-    console.error("公开发布需要显式确认：加 --draft 先看草稿，或确认后手动改脚本");
+  if (opt.visibility === "公开可见" && !opt.draft && !opt.confirmPublic) {
+    console.error("公开发布需要显式确认：加 --confirm-public 确认公开发布（或 --draft 先看草稿）");
     process.exit(1);
   }
 
