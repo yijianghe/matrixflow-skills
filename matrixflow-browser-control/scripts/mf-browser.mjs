@@ -55,7 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-10.1";
+const SKILL_VERSION = "2026-08-10.2";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
@@ -98,13 +98,41 @@ function baseUrl() {
   return (process.env.MF_LOCAL_API || `http://127.0.0.1:${DEFAULT_PORT}`).replace(/\/$/, "");
 }
 
+function resolveUserDataCandidates() {
+  const candidates = new Set([resolveUserDataRoot()]);
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || "";
+    const localAppData = process.env.LOCALAPPDATA || "";
+    candidates.add(join(appData, "@matrixflow", "desktop"));
+    candidates.add(join(appData, "MatrixFlow", "desktop"));
+    candidates.add(join(localAppData, "@matrixflow", "desktop"));
+    candidates.add(join(localAppData, "MatrixFlow", "desktop"));
+    candidates.add(join(localAppData, "Programs", "MatrixFlow"));
+    candidates.add(join(localAppData, "Programs", "@matrixflow"));
+  }
+  return [...candidates].filter(Boolean);
+}
+
+function resolveTokenPath() {
+  if (process.env.MF_LOCAL_API_TOKEN) return "env:MF_LOCAL_API_TOKEN";
+  try {
+    for (const root of resolveUserDataCandidates()) {
+      const p = join(root, "local-api-token.txt");
+      if (existsSync(p) && readFileSync(p, "utf8").trim()) return p;
+    }
+  } catch {}
+  return "";
+}
+
 function resolveToken() {
   if (process.env.MF_LOCAL_API_TOKEN) return process.env.MF_LOCAL_API_TOKEN.trim();
   try {
-    const p = join(resolveUserDataRoot(), "local-api-token.txt");
-    if (existsSync(p)) {
-      const t = readFileSync(p, "utf8").trim();
-      if (t) return t;
+    for (const root of resolveUserDataCandidates()) {
+      const p = join(root, "local-api-token.txt");
+      if (existsSync(p)) {
+        const t = readFileSync(p, "utf8").trim();
+        if (t) return t;
+      }
     }
   } catch {}
   return "";
@@ -977,7 +1005,7 @@ async function cmdDoctor() {
     lines.push(
       probe.status === 401
         ? warn(
-            `MatrixFlow 客户端正在运行，但本地 API 未授权（401）：请打开客户端“设置 → API 文档”核对 Token 是否正确。`
+            `MatrixFlow 客户端正在运行，但本地 API 未授权（401）：1) 确认“设置 → API 文档”里本地 API 已开启；2) 用页面里的 Token 覆盖 local-api-token.txt；3) 写完后【重启 MatrixFlow 客户端】再试（应用启动时才加载 Token 文件）。`
           )
         : ok(`MatrixFlow 客户端正在运行（${baseUrl()}）`)
     );
@@ -991,21 +1019,19 @@ async function cmdDoctor() {
 
   // 3. 本地 API Token
   const token = resolveToken();
+  const tokenPath = resolveTokenPath();
   info.token = token ? "present" : "missing";
+  info.tokenPath = tokenPath;
   if (!token) {
     lines.push(
       warn(
-        "本地 API Token 未配置：部分接口可能返回 401。请在 MatrixFlow 设置 → API 文档中开启本地 API，并把 Token 写入 userData/local-api-token.txt，或用环境变量 MF_LOCAL_API_TOKEN。"
-      )
-    );
-  } else if (token.startsWith("mf_live_") || token.length < 20 || !/^[A-Za-z0-9-]{20,}$/.test(token)) {
-    lines.push(
-      warn(
-        `本地 API Token 格式可疑（${token.slice(0, 12)}...）：当前版本本地 API Token 是 36 位 UUID（形如 201537c0-xxxx-xxxx-xxxx-xxxxxxxxxxxx），不是 mf_live_ 开头的云端/会话 Token。请重新到 MatrixFlow 设置 → API 文档 复制真正的本地 API Token。`
+        "本地 API Token 未配置：请打开 MatrixFlow 设置 → API 文档，开启本地 API，然后把页面里的 Token 写入 local-api-token.txt（或用环境变量 MF_LOCAL_API_TOKEN）。"
       )
     );
   } else {
-    lines.push(ok("本地 API Token 已配置（local-api-token.txt 或 MF_LOCAL_API_TOKEN）"));
+    lines.push(
+      ok(`本地 API Token 已配置（来源：${tokenPath || "MF_LOCAL_API_TOKEN"}）`)
+    );
   }
 
   // 4. 环境列表 & 云端登录状态

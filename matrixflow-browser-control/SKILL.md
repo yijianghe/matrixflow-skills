@@ -55,13 +55,14 @@ node scripts/mf-browser.mjs doctor
 1. **打开 MatrixFlow 客户端并登录账号**（新建/删除窗口必须走云端，未登录会失败）；
 2. **开启本地 API 并复制 Token**：MatrixFlow → 设置 → API 文档 → 开启本地 API → 复制 Token，
    写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`（或告诉 AI 帮你写）。
-   ⚠️ **本地 API Token 是 36 位 UUID**（形如 `201537c0-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）；
-   `mf_live_` 开头的是**云端/会话 Token**，不是本地 API Token，复制错会导致所有接口 401。
+   不同版本 Token 格式可能不同（有的版本是 36 位 UUID，有的是 `mf_live_` 开头），以
+   “设置 → API 文档”页面里显示的为准；**写完 Token 文件后要重启 MatrixFlow 客户端**再操作，
+   否则接口仍会 401（应用启动时才加载 Token 文件）。
 3. **直接创建窗口**：`node scripts/mf-browser.mjs create "小红书1" ...`
    ——新账号没有任何环境时，脚本会**自动使用内置默认指纹**创建，**无需手动先建一个环境做模板**。
 
 排错速查：
-- 接口全部 401 → Token 复制错了/没开启本地 API（按第 2 步重新复制）；
+- 接口全部 401 → 本地 API 没开启 / Token 复制错了 / **写完 Token 没重启客户端**（按第 2 步处理）；
 - “没有可用指纹模板” → 更新到本版本（已内置默认指纹，不再需要手动建模板）；
 - 云端未登录（`doctor` 显示）→ 先在客户端登录账号。
 
