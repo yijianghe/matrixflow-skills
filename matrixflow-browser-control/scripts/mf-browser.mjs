@@ -170,6 +170,9 @@ async function resolveProfileId(profile, { allowOffline = false } = {}) {
   const fullByName = fullList.find((p) => p.name === profile);
   if (fullByName) return fullByName.id;
   if (allowOffline) {
+    // 本地列表接口有 100 条上限：新窗口可能不在列表里，但打开/关闭接口
+    // 支持直接按 profileId 操作。此处按 ID 特征透传，交给目标接口校验。
+    if (/^[A-Za-z0-9_-]{10,}$/.test(profile)) return profile;
     throw new Error(`Profile not found: ${profile}`);
   }
   throw new Error(`Profile not found (running): ${profile}. Open it first or use an exact id.`);
@@ -626,6 +629,25 @@ async function cmdOpenBatch(csv) {
   console.log(JSON.stringify(results, null, 2));
 }
 
+// 上传本地文件到页面 file input（绕过 Windows 文件选择框），用于视频/图片上传
+// 用法: upload <id|name[@tab]> <file1> [file2 ...]（多文件一次注入）
+async function cmdUpload(profileSpec, ...files) {
+  if (!files.length) throw new Error("用法: upload <profileId> <file...>");
+  const { cdp } = await connectPage(profileSpec);
+  try {
+    const doc = await cdp.send("DOM.getDocument");
+    const node = await cdp.send("DOM.querySelector", {
+      nodeId: doc.root.nodeId,
+      selector: 'input[type="file"]',
+    });
+    if (!node || !node.nodeId) throw new Error("页面没有 file input（请先进入上传页面）");
+    await cdp.send("DOM.setFileInputFiles", { nodeId: node.nodeId, files });
+    console.log(JSON.stringify({ ok: true, files }));
+  } finally {
+    cdp.close();
+  }
+}
+
 async function cmdAutomaOpen(args) {
   const workflowId = args[0];
   let profileId = "";
@@ -727,6 +749,10 @@ async function cmdText(profile, maxChars) {
 async function cmdEval(profile, expression) {
   if (!expression || expression === "-") {
     expression = await readStdin();
+  }
+  if (expression && expression.startsWith("@")) {
+    // @<file>：从 UTF-8 文件读取 JS，避免管道/命令行编码问题（推荐中文脚本用）
+    expression = readFileSync(expression.slice(1), "utf8");
   }
   if (!expression) throw new Error("Usage: eval <profile> '<javascript>'  (or pipe JS via stdin with '-')");
   const { cdp } = await connectPage(profile);
@@ -1068,6 +1094,7 @@ async function main() {
     case "list": return await cmdList();
     case "open": return await cmdOpen(args);
     case "open-batch": return await cmdOpenBatch(args[0]);
+    case "upload": return await cmdUpload(args[0], ...args.slice(1));
     case "create": return await cmdCreate(args);
     case "delete": return await cmdDelete(args[0]);
     case "close": return await cmdClose(args[0]);

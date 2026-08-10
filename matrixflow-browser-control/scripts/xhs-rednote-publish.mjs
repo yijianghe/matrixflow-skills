@@ -591,11 +591,11 @@ async function main() {
   const profileDir = findProfileDir(String(profileId).split("@")[0]);
   if (!profileDir) throw new Error(`Profile ${profileId} not running`);
   const port = Number.parseInt(readFileSync(join(profileDir, "DevToolsActivePort"), "utf8").trim().split(/\r?\n/)[0], 10);
-  const PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish?source=official";
+  const PUBLISH_URL = "https://creator.rednote.com/publish/publish";
 
   // 确保发布页存在
   let targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  let page = targets.find((t) => t.type === "page" && t.url.includes("creator.xiaohongshu.com/publish"));
+  let page = targets.find((t) => t.type === "page" && t.url.includes("creator.rednote.com/publish"));
   if (!page) {
     const ver = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
     const bws = makeCdp(ver.webSocketDebuggerUrl);
@@ -604,7 +604,7 @@ async function main() {
     for (let i = 0; i < 40; i++) {
       await sleep(1000);
       targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-      page = targets.find((t) => t.type === "page" && t.url.includes("creator.xiaohongshu.com/publish"));
+      page = targets.find((t) => t.type === "page" && t.url.includes("creator.rednote.com/publish"));
       if (page) break;
     }
   }
@@ -682,7 +682,7 @@ async function main() {
     const node = await cdp.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: 'input[type="file"]' });
     await cdp.send("DOM.setFileInputFiles", { nodeId: node.nodeId, files: imgs });
     stamp("图片已注入");
-    await waitFor(cdp, `[...document.querySelectorAll('img')].some(i => i.getBoundingClientRect().width > 200)`, 30000);
+    await waitFor(cdp, `[...document.querySelectorAll('img')].some(i => i.getBoundingClientRect().width > 50)`, 30000);
     await sleep(1200);
   } else {
     // ---------- 文字转图片模式 ----------

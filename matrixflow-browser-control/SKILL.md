@@ -371,3 +371,25 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 
 本地 API 详情（认证、接口、CDP 布局、故障排查）见 `references/api.md`。
 带代理创建窗口的完整流程（云端令牌读取、代理创建、proxyId 绑定、验证）见 `references/create-window-with-proxy.md`。
+
+## 海外版小红书（REDnote）发布（2026-08-08 新增）
+
+海外版小红书 = rednote.com，创作者平台为 `creator.rednote.com`。已实测三窗口三篇图文发布成功，每篇约 15 秒。
+
+```bash
+# 本地图片发布（可多张 --image）
+node scripts/xhs-rednote-publish.mjs <profileId> \
+  --title "标题（≤20字）" --body-file %USERPROFILE%\body.txt \
+  --image 图1.png --image 图2.png --image 图3.png \
+  --visibility 公开可见 --confirm-public
+```
+
+- 默认可见范围跟随平台（rednote 默认「公开可见」；要私密传 `--visibility 仅自己可见`）；
+- 正文直接写 `#话题`（至少 3 个且与内容相关）；
+- 图片素材优先用 `capture-window.ps1` 截 MatrixFlow 主窗口 + `screenshot` 截浏览器实机画面；主窗口截图需打码左下角登录邮箱；
+- 脚本自动处理：切「上传图文」→ 注入多图 → 填标题/正文 → 点发布（shadow DOM 按钮）→ 校验成功 → 记录防重复历史。
+
+## 上传/读脚本扩展（2026-08-08）
+
+- `upload <id|name[@tab]> <file1> [file2...]`：把本地文件直接注入页面 `input[type="file"]`（绕过 Windows 文件选择框），多文件一次注入；
+- `eval <id|name[@tab]> @<file>`：从 UTF-8 文件读取 JS 执行，避免中文经管道/命令行乱码（推荐含中文的脚本用）。
