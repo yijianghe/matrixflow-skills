@@ -55,8 +55,33 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-06.4";
+const SKILL_VERSION = "2026-08-10.1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
+const DEFAULT_FINGERPRINT = {
+  os: "Windows 10",
+  fonts: [
+    "Arial", "Arial Black", "Calibri", "Cambria", "Comic Sans MS", "Consolas",
+    "Courier New", "Georgia", "Impact", "Lucida Console", "Microsoft YaHei",
+    "Segoe UI", "SimSun", "Tahoma", "Times New Roman", "Trebuchet MS", "Verdana",
+  ],
+  webGL: { mode: "noise", vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0)" },
+  canvas: { mode: "noise", noiseSeed: 609607 },
+  screen: { width: 1920, height: 1080, colorDepth: 24, pixelRatio: 1.25 },
+  webRTC: { mode: "proxy" },
+  language: "zh-CN",
+  platform: "Win32",
+  timezone: "Asia/Shanghai",
+  languages: ["zh-CN", "zh", "en"],
+  userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  doNotTrack: false,
+  geolocation: { mode: "disabled" },
+  audioContext: "noise-609607",
+  deviceMemory: 8,
+  browserVersion: "130.0.0.0",
+  hardwareConcurrency: 8,
+};
 
 function resolveUserDataRoot() {
   if (process.env.MF_USER_DATA) return process.env.MF_USER_DATA;
@@ -377,11 +402,12 @@ async function cmdCreate(args) {
         "无法新建环境：MatrixFlow 客户端未登录（或云端账号不可用）。请先打开客户端登录账号，再重试 create；可先运行 doctor 自检确认。"
       );
     }
-    throw new Error(
-      "没有可用指纹模板：请先在 MatrixFlow 客户端里手动创建一个环境，之后脚本才能克隆指纹批量新建。"
+    // 新账号没有环境：直接用内置默认指纹创建，不再要求手动建模板
+    console.warn(
+      "[create] 当前账号没有任何环境，使用内置默认指纹模板自动创建（新账号无需手动建模板）。"
     );
   }
-  const tpl = items[0]?.fingerprint;
+  const tpl = items[0]?.fingerprint ?? DEFAULT_FINGERPRINT;
   if (!tpl) {
     throw new Error(
       "没有可用指纹模板：请先在 MatrixFlow 客户端里手动创建一个环境（当前列表来自云端但缺少指纹数据）。"
@@ -966,13 +992,21 @@ async function cmdDoctor() {
   // 3. 本地 API Token
   const token = resolveToken();
   info.token = token ? "present" : "missing";
-  lines.push(
-    token
-      ? ok("本地 API Token 已配置（local-api-token.txt 或 MF_LOCAL_API_TOKEN）")
-      : warn(
-          "本地 API Token 未配置：部分接口可能返回 401。请在 MatrixFlow 设置 → API 文档中开启本地 API，并把 Token 写入 userData/local-api-token.txt，或用环境变量 MF_LOCAL_API_TOKEN。"
-        )
-  );
+  if (!token) {
+    lines.push(
+      warn(
+        "本地 API Token 未配置：部分接口可能返回 401。请在 MatrixFlow 设置 → API 文档中开启本地 API，并把 Token 写入 userData/local-api-token.txt，或用环境变量 MF_LOCAL_API_TOKEN。"
+      )
+    );
+  } else if (token.startsWith("mf_live_") || token.length < 20 || !/^[A-Za-z0-9-]{20,}$/.test(token)) {
+    lines.push(
+      warn(
+        `本地 API Token 格式可疑（${token.slice(0, 12)}...）：当前版本本地 API Token 是 36 位 UUID（形如 201537c0-xxxx-xxxx-xxxx-xxxxxxxxxxxx），不是 mf_live_ 开头的云端/会话 Token。请重新到 MatrixFlow 设置 → API 文档 复制真正的本地 API Token。`
+      )
+    );
+  } else {
+    lines.push(ok("本地 API Token 已配置（local-api-token.txt 或 MF_LOCAL_API_TOKEN）"));
+  }
 
   // 4. 环境列表 & 云端登录状态
   let profileCount = 0;
@@ -990,6 +1024,13 @@ async function cmdDoctor() {
             "云端账号未登录或不可用（当前只能看到运行中的窗口）。新建/删除环境都需要登录：请打开 MatrixFlow 客户端登录账号后重试。"
           )
     );
+    if (cloudSource && profileCount === 0) {
+      lines.push(
+        warn(
+          "当前账号还没有任何环境：无需手动建模板，直接执行 create 会使用内置默认指纹自动创建窗口。"
+        )
+      );
+    }
   } catch (e) {
     lines.push(warn(`读取环境列表失败：${e.message}`));
   }
@@ -1021,7 +1062,7 @@ async function cmdDoctor() {
   if (profileCount === 0) {
     lines.push(
       warn(
-        "当前没有任何环境：首次使用请先在 MatrixFlow 客户端里手动创建一个环境，之后脚本才能克隆指纹批量新建。"
+        "当前没有任何环境：无需手动建模板，直接执行 create 会使用内置默认指纹自动创建窗口。"
       )
     );
   }

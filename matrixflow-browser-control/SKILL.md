@@ -50,6 +50,21 @@ node scripts/mf-browser.mjs doctor
 > **重要：如果 `doctor` 自检全部 `[PASS]`，不要修改任何脚本**——所有兼容修复已内置（版本号见 doctor 第一行）。
 > 若 Agent 说要“打补丁/改代码”，先看 `doctor` 是否输出“内置兼容修复齐全”，是则直接使用，不需要改。
 
+### 新电脑安装后 3 步（必看）
+
+1. **打开 MatrixFlow 客户端并登录账号**（新建/删除窗口必须走云端，未登录会失败）；
+2. **开启本地 API 并复制 Token**：MatrixFlow → 设置 → API 文档 → 开启本地 API → 复制 Token，
+   写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`（或告诉 AI 帮你写）。
+   ⚠️ **本地 API Token 是 36 位 UUID**（形如 `201537c0-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）；
+   `mf_live_` 开头的是**云端/会话 Token**，不是本地 API Token，复制错会导致所有接口 401。
+3. **直接创建窗口**：`node scripts/mf-browser.mjs create "小红书1" ...`
+   ——新账号没有任何环境时，脚本会**自动使用内置默认指纹**创建，**无需手动先建一个环境做模板**。
+
+排错速查：
+- 接口全部 401 → Token 复制错了/没开启本地 API（按第 2 步重新复制）；
+- “没有可用指纹模板” → 更新到本版本（已内置默认指纹，不再需要手动建模板）；
+- 云端未登录（`doctor` 显示）→ 先在客户端登录账号。
+
 ## 工作流程
 
 1. **确认应用在运行**：`node scripts/mf-browser.mjs status`。如果 `appRunning` 为 false，启动 MatrixFlow 并等待几秒后重试。
