@@ -176,7 +176,7 @@ node mf-browser.mjs open <窗口ID> https://www.xiaohongshu.com   # 打开小红
 在**另一台电脑**上装好技能后，先跑 `doctor` 自检，按提示逐项处理：
 
 1. **客户端未登录**（最常见）：新建/删除窗口、绑定代理都要走云端。打开 MatrixFlow 客户端 → 登录你的账号 → 重新 `doctor`，直到"云端账号已登录"显示 `[PASS]`。
-2. **本地 API Token 未配置 / 接口全部 401**：客户端"设置 → API 文档"里开启本地 API，把页面显示的 Token（不同版本格式不同：可能是 36 位 UUID，也可能是 `mf_live_` 开头，以页面为准）写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`，或用环境变量 `MF_LOCAL_API_TOKEN`。**写完 Token 文件后请重启 MatrixFlow 客户端**，否则接口仍会 401。
+2. **本地 API Token 未配置 / 接口全部 401**：**不需要手动复制 Token**。MatrixFlow 启动时会自动生成本地 API Token 并写入 `%APPDATA%\@matrixflow\desktop\local-api-token.txt`，技能自动读取。如果该文件被写成了别的内容（比如把"API 密钥"页面的 `mf_live_...` 云端密钥写进去了）导致 401：**删除该文件 → 重启 MatrixFlow 客户端**，应用会自动重新生成正确 Token。
 3. **当前没有任何环境**：无需手动建模板。直接执行 `create`，脚本会自动使用**内置默认指纹**创建窗口（2026-08-10 起版本）。
 4. **Node.js 版本过低**：装 Node.js 22+；桌面版可直接用 Codex 自带 Node 运行脚本。
 

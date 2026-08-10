@@ -55,7 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-10.2";
+const SKILL_VERSION = "2026-08-10.3";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
@@ -1005,7 +1005,7 @@ async function cmdDoctor() {
     lines.push(
       probe.status === 401
         ? warn(
-            `MatrixFlow 客户端正在运行，但本地 API 未授权（401）：1) 确认“设置 → API 文档”里本地 API 已开启；2) 用页面里的 Token 覆盖 local-api-token.txt；3) 写完后【重启 MatrixFlow 客户端】再试（应用启动时才加载 Token 文件）。`
+            `MatrixFlow 客户端正在运行，但本地 API 未授权（401）：最常见原因是 local-api-token.txt 被写成了别的内容（例如“API 密钥”页面的 mf_live_ 云端密钥）。修复：删除 %APPDATA%\\@matrixflow\\desktop\\local-api-token.txt，然后【重启 MatrixFlow 客户端】，应用会自动重新生成正确 Token；也可用环境变量 MF_LOCAL_API_TOKEN 覆盖。`
           )
         : ok(`MatrixFlow 客户端正在运行（${baseUrl()}）`)
     );
