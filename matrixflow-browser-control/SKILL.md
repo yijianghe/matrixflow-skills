@@ -284,6 +284,33 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 
 ## Facebook 种草发帖（2026-08-07 新增）
 
+### Facebook 自动化工作流（Automa，2026-08-11 新增）
+
+内置工作流：`resources/automa-workflows/fb-auto-posting.automa.json`
+
+**功能**：读取谷歌表格（关键词/文案/群聊/评论）→ 打开 Facebook → 自动切简体中文 → 检查登录 →
+搜索关键词打开帖子浏览点赞评论 → 进入小组分享帖子 → 上传图片发布。
+
+**谷歌表格模板**：https://docs.google.com/spreadsheets/d/1akNZK1qV-We18E4m2rqMuybBUYgctUuBbSjn3DNqQsQ
+- 第一列/第一行英文不能删不能动，否则出错；
+- 列结构：path（图片路径）、name（关键词）、copy（文案）、group chat（群聊内容）、
+  timed release、keywords（搜索词）、jianghe/huanhuan/tiantian/gege…（各账号评论内容）。
+
+**导入到 MatrixFlow**：
+- 首次导入（推荐）：打开一个窗口 → 在浏览器里打开 Automa 面板（chrome-extension:// Automa dashboard）
+  → 工作流 → 导入 → 用 `upload` 命令把 `fb-auto-posting.automa.json` 注入文件选择框完成导入；
+- 更新内容：`node scripts/mf-browser.mjs workflow-import resources/automa-workflows/fb-auto-posting.automa.json fb_auto "Facebook自动化"`。
+
+**多窗口编排（每个窗口发一行，发完关窗口开下一个）**：
+1. 先读表格 CSV（表格是公开可读的）：`https://docs.google.com/spreadsheets/d/1akNZK1qV-We18E4m2rqMuybBUYgctUuBbSjn3DNqQsQ/export?format=csv&gid=0`；
+2. 从第 2 行开始，每行对应一个窗口：`open <窗口>` → 确认已登录 Facebook（未登录先登录）→
+   运行工作流（在 Automa 面板点击运行，或用 CDP 驱动执行）→ 发完 `close <窗口>` → 下一个窗口用下一行；
+3. 也可以不用 Automa，直接用 `scripts/fb-post.mjs` / `fb-group-post.mjs` 发帖，
+   再用 `scripts/fb-engage.mjs` 做搜索关键词点赞评论——效果一样，由 Agent 决定。
+
+**账号登录**：工作流开头会检查是否已登录、是否简体中文；未登录会报错停止。
+如果窗口没登录，Agent 可以用账号密码登录（或让客户扫码），登录后再跑工作流。
+
 用 `scripts/fb-post.mjs` 在已登录的 Facebook 窗口发「种草帖」（软推广，禁止硬广）：
 
 ```bash

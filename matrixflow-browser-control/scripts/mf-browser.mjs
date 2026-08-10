@@ -55,7 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-10.3";
+const SKILL_VERSION = "2026-08-11.1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
@@ -730,6 +730,37 @@ async function cmdWorkflowCreate(workflowId, name) {
   console.log(JSON.stringify(r.data, null, 2));
 }
 
+// 导入 Automa 工作流 JSON 到 MatrixFlow（部署 fb-auto-posting 等自动化工作流）
+// 用法: workflow-import <file.json> [workflowId] [name]
+async function cmdWorkflowImport(filePath, workflowId, name) {
+  if (!filePath) throw new Error("用法: workflow-import <工作流.json> [workflowId] [名称]");
+  const raw = readFileSync(filePath, "utf8");
+  const wf = JSON.parse(raw);
+  const wfId = workflowId || `fb_${Date.now().toString(36)}`;
+  const wfName = name || wf.name || "导入的工作流";
+  const trySync = async (method) => {
+    if (method === "init") {
+      await api("/api/v1/matrixflow/workflows/init", {
+        method: "POST",
+        body: { workflowId: wfId, name: wfName }
+      });
+    }
+    return api("/api/v1/matrixflow/workflows/sync", {
+      method: "POST",
+      body: { workflowId: wfId, workflowJson: wf, name: wfName }
+    });
+  };
+  try {
+    const r = await trySync("direct");
+    console.log(JSON.stringify({ ok: true, workflowId: wfId, name: wfName, result: r.data }, null, 2));
+  } catch (err) {
+    // 工作流不存在 → 先 init 再 sync
+    await trySync("init");
+    const r2 = await trySync("direct");
+    console.log(JSON.stringify({ ok: true, workflowId: wfId, name: wfName, result: r2.data }, null, 2));
+  }
+}
+
 async function cmdWorkflowList() {
   const r = await api("/api/v1/matrixflow/workflows");
   const list = (r.data || []).map((w) => ({
@@ -1167,6 +1198,7 @@ async function main() {
     case "close": return await cmdClose(args[0]);
     case "automa-open": return await cmdAutomaOpen(args);
     case "workflow-create": return await cmdWorkflowCreate(args[0], args[1]);
+    case "workflow-import": return await cmdWorkflowImport(args[0], args[1], args[2]);
     case "workflow-list": return await cmdWorkflowList();
     case "pages": return await cmdPages(args[0]);
     case "navigate": return await cmdNavigate(args[0], args[1]);
