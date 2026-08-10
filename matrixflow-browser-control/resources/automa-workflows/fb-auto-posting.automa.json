@@ -492,7 +492,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[placeholder=\"发表公开评论…\"]",
+          "selector": "[aria-label=\"发表公开评论…\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -795,7 +795,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[placeholder=\"写评论…\"]",
+          "selector": "[aria-label*=\"写评论\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": false
@@ -1077,7 +1077,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[placeholder=\"发表公开评论…\"]",
+          "selector": "[aria-label=\"发表公开评论…\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -1741,7 +1741,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[placeholder=\"发表公开评论…\"]",
+          "selector": "[aria-label=\"发表公开评论…\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -1787,7 +1787,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[placeholder=\"发表公开评论…\"]",
+          "selector": "[aria-label=\"发表公开评论…\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -1833,7 +1833,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[placeholder=\"发表公开评论…\"]",
+          "selector": "[aria-label=\"发表公开评论…\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -1879,7 +1879,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[type=\"text\"]",
+          "selector": "[aria-label*=\"写评论\"], [aria-label*=\"发表公开评论\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -1925,7 +1925,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[type=\"text\"]",
+          "selector": "[aria-label*=\"写评论\"], [aria-label*=\"发表公开评论\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
@@ -1971,7 +1971,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea[type=\"text\"]",
+          "selector": "[aria-label*=\"写评论\"], [aria-label*=\"发表公开评论\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true
