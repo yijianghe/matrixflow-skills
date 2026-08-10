@@ -2603,6 +2603,78 @@
           "x": 40,
           "y": 900
         }
+      },
+      {
+        "type": "BlockBasic",
+        "data": {
+          "code": "(() => new Promise((r) => setTimeout(r, 2500 + Math.floor(Math.random() * 3500))))()",
+          "context": "website",
+          "description": "真人随机等待（搜索前）",
+          "disableBlock": false,
+          "everyNewTab": false,
+          "preloadScripts": [],
+          "runBeforeLoad": false,
+          "settings": {
+            "blockTimeout": 0,
+            "debugMode": false
+          },
+          "timeout": 30000
+        },
+        "events": {},
+        "id": "rs1",
+        "label": "javascript-code",
+        "position": {
+          "x": 40,
+          "y": 1150
+        }
+      },
+      {
+        "type": "BlockBasic",
+        "data": {
+          "code": "(() => new Promise((r) => setTimeout(r, 3500 + Math.floor(Math.random() * 4500))))()",
+          "context": "website",
+          "description": "真人随机等待（搜索后）",
+          "disableBlock": false,
+          "everyNewTab": false,
+          "preloadScripts": [],
+          "runBeforeLoad": false,
+          "settings": {
+            "blockTimeout": 0,
+            "debugMode": false
+          },
+          "timeout": 30000
+        },
+        "events": {},
+        "id": "rs2",
+        "label": "javascript-code",
+        "position": {
+          "x": 340,
+          "y": 100
+        }
+      },
+      {
+        "type": "BlockBasic",
+        "data": {
+          "code": "(() => new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 4000))))()",
+          "context": "website",
+          "description": "真人随机等待（评论前）",
+          "disableBlock": false,
+          "everyNewTab": false,
+          "preloadScripts": [],
+          "runBeforeLoad": false,
+          "settings": {
+            "blockTimeout": 0,
+            "debugMode": false
+          },
+          "timeout": 30000
+        },
+        "events": {},
+        "id": "rs3",
+        "label": "javascript-code",
+        "position": {
+          "x": 3220,
+          "y": 1900
+        }
       }
     ],
     "edges": [
@@ -4268,23 +4340,6 @@
         "updatable": true,
         "selectable": true,
         "markerEnd": "arrowclosed",
-        "sourceHandle": "6rrdolu-output-1",
-        "targetHandle": "ob4uo9w-input-1",
-        "source": "6rrdolu",
-        "target": "ob4uo9w",
-        "data": {},
-        "events": {},
-        "id": "vueflow__edge-6rrdolu6rrdolu-output-1-ob4uo9wob4uo9w-input-1",
-        "sourceX": 3216.901352472075,
-        "sourceY": 1815.2624912949393,
-        "targetX": 3494.851004040132,
-        "targetY": -534.861611021807
-      },
-      {
-        "type": "custom",
-        "updatable": true,
-        "selectable": true,
-        "markerEnd": "arrowclosed",
         "sourceHandle": "8o7wanc-output-1",
         "targetHandle": "aa1td2b-input-1",
         "source": "8o7wanc",
@@ -4627,24 +4682,6 @@
         "targetY": 248.70412329538817
       },
       {
-        "sourceHandle": "t1j4g4h-output-1",
-        "targetHandle": "uhzbqaf-input-1",
-        "type": "custom",
-        "source": "t1j4g4h",
-        "target": "uhzbqaf",
-        "updatable": true,
-        "selectable": true,
-        "data": {},
-        "events": {},
-        "class": "source-t1j4g4h-output-1 target-uhzbqaf-input-1",
-        "markerEnd": "arrowclosed",
-        "id": "vueflow__edge-t1j4g4ht1j4g4h-output-1-uhzbqafuhzbqaf-input-1",
-        "sourceX": 3183.264947337907,
-        "sourceY": 793.2655199014938,
-        "targetX": 3689.915928902427,
-        "targetY": 936.9806423079879
-      },
-      {
         "sourceHandle": "jbjh63q-output-1",
         "targetHandle": "fblangchk-input-1",
         "type": "custom",
@@ -4672,16 +4709,81 @@
       },
       {
         "sourceHandle": "fbloginchk-output-1",
-        "targetHandle": "87rmw3v-input-1",
+        "targetHandle": "rs1-input-1",
         "type": "custom",
         "source": "fbloginchk",
+        "target": "rs1",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "events": {},
+        "markerEnd": "arrowclosed",
+        "id": "edge-fbloginchk-rs1"
+      },
+      {
+        "sourceHandle": "rs1-output-1",
+        "targetHandle": "87rmw3v-input-1",
+        "type": "custom",
+        "source": "rs1",
         "target": "87rmw3v",
         "updatable": true,
         "selectable": true,
         "data": {},
         "events": {},
         "markerEnd": "arrowclosed",
-        "id": "edge-fbloginchk-87rmw3v"
+        "id": "edge-rs1-87rmw3v"
+      },
+      {
+        "sourceHandle": "t1j4g4h-output-1",
+        "targetHandle": "rs2-input-1",
+        "type": "custom",
+        "source": "t1j4g4h",
+        "target": "rs2",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "events": {},
+        "markerEnd": "arrowclosed",
+        "id": "edge-t1j4g4h-rs2"
+      },
+      {
+        "sourceHandle": "rs2-output-1",
+        "targetHandle": "uhzbqaf-input-1",
+        "type": "custom",
+        "source": "rs2",
+        "target": "uhzbqaf",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "events": {},
+        "markerEnd": "arrowclosed",
+        "id": "edge-rs2-uhzbqaf"
+      },
+      {
+        "sourceHandle": "6rrdolu-output-1",
+        "targetHandle": "rs3-input-1",
+        "type": "custom",
+        "source": "6rrdolu",
+        "target": "rs3",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "events": {},
+        "markerEnd": "arrowclosed",
+        "id": "edge-6rrdolu-rs3"
+      },
+      {
+        "sourceHandle": "rs3-output-1",
+        "targetHandle": "ob4uo9w-input-1",
+        "type": "custom",
+        "source": "rs3",
+        "target": "ob4uo9w",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "events": {},
+        "markerEnd": "arrowclosed",
+        "id": "edge-rs3-ob4uo9w"
       }
     ],
     "position": [

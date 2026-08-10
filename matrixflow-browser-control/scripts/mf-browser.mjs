@@ -55,7 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-11.1";
+const SKILL_VERSION = "2026-08-11.2";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
