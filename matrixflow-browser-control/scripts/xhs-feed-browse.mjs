@@ -192,6 +192,16 @@ window.__mf = {
     if (arrow && arrow.getBoundingClientRect().width > 10) return { type: "multi", current: 0, total: 0, arrow: true };
     return { type: "single" };
   },
+  contentSignals() {
+    const dm = document.querySelector(".note-detail-mask");
+    if (!dm) return { textLen: 0, imgs: 0 };
+    const texts = [...dm.querySelectorAll(".note-text, .note-content, .title, .desc, .note-detail-mask .content, .note-scroller p, .note-scroller div")]
+      .map((n) => (n.textContent || "").trim())
+      .filter((t) => t.length > 10);
+    const textLen = texts.reduce((a, b) => a + b.length, 0);
+    const imgs = dm.querySelectorAll("img").length;
+    return { textLen, imgs };
+  },
   carouselSnapshot() {
     const dm = document.querySelector(".note-detail-mask");
     if (!dm) return "";
@@ -504,13 +514,27 @@ async function processOne(cdp, ctx) {
   }
   log.push("like:" + likeAct + "/" + ctx.likes + " collect:" + collectAct + "/" + ctx.collects);
 
-  // 保证图文停留 ≥ 30 秒（随机补足 30-45 秒区间）
+  // 内容化停留时长：按笔记类型/图片数/文字长度估算“真人阅读时间”，每篇都不同，绝不统一
+  let dwellTarget = ctx.minDwell;
+  try {
+    const sig = await evalInPage(cdp, "window.__mf.contentSignals()");
+    if (media && media.type === "video") {
+      const dur = Number(media.duration) || 0;
+      dwellTarget = dur > 0 ? Math.min(120, Math.max(30, Math.round(dur * rand(0.45, 0.85)))) : rand(30, 60);
+    } else {
+      const imgs = media && media.type === "multi" ? Math.max(Number(media.total) || 3, 2) : 1;
+      const textBonus = sig && sig.textLen > 200 ? 20 : sig && sig.textLen > 80 ? 10 : 0;
+      const imgBonus = Math.min(20, imgs * 3);
+      dwellTarget = Math.round(rand(20, 34) + imgBonus + textBonus + rand(-4, 10));
+      dwellTarget = Math.max(ctx.minDwell, Math.min(90, dwellTarget));
+    }
+  } catch {}
   const elapsed = Date.now() - t0;
-  const minMs = ctx.minDwell * 1000;
-  if (elapsed < minMs) {
-    await sleep(rand(minMs - elapsed, minMs - elapsed + 9000));
+  const targetMs = dwellTarget * 1000;
+  if (elapsed < targetMs) {
+    await sleep(rand(targetMs - elapsed, targetMs - elapsed + 8000));
   }
-  log.push("dwell:" + Math.round((Date.now() - t0) / 1000) + "s");
+  log.push("dwell:" + Math.round((Date.now() - t0) / 1000) + "s (target " + dwellTarget + "s)");
 
   // 关闭详情 → 确认关闭 → 滚发现页
   const closed = await closeDetail(cdp);
@@ -526,22 +550,24 @@ async function main() {
   const args = process.argv.slice(2);
   const profileSpec = args[0];
   if (!profileSpec) {
-    console.error("Usage: xhs-feed-browse.mjs <profileId> [--rounds 6] [--like-ratio 0.35] [--collect-ratio 0.2] [--max-likes 30] [--max-collects 20] [--min-dwell 30]");
+    console.error("Usage: xhs-feed-browse.mjs <profileId> [--rounds 6] [--session 8] [--like-ratio 0.35] [--collect-ratio 0.2] [--max-likes 30] [--max-collects 20] [--min-dwell 25]");
     process.exit(1);
   }
   let rounds = 6;
+  let sessionMin = 8; // 默认会话时长（分钟），养号/打标签建议 8 分钟
   let likeRatio = 0.35;
   let collectRatio = 0.2;
   let maxLikes = 30;
   let maxCollects = 20;
-  let minDwell = 30;
+  let minDwell = 25;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--rounds") rounds = Number.parseInt(args[++i], 10) || 6;
+    if (args[i] === "--session") sessionMin = Number.parseFloat(args[++i]) || 8;
     if (args[i] === "--like-ratio") likeRatio = Number.parseFloat(args[++i]);
     if (args[i] === "--collect-ratio") collectRatio = Number.parseFloat(args[++i]);
     if (args[i] === "--max-likes") maxLikes = Number.parseInt(args[++i], 10) || 30;
     if (args[i] === "--max-collects") maxCollects = Number.parseInt(args[++i], 10) || 20;
-    if (args[i] === "--min-dwell") minDwell = Number.parseInt(args[++i], 10) || 30;
+    if (args[i] === "--min-dwell") minDwell = Number.parseInt(args[++i], 10) || 25;
   }
 
   const profileId = String(profileSpec).split("@")[0];
@@ -575,11 +601,19 @@ async function main() {
     minDwell,
   };
   const results = [];
-  for (let round = 1; round <= rounds; round++) {
+  const sessionMs = sessionMin * 60 * 1000;
+  const sessionStart = Date.now();
+  const hardCap = Math.max(rounds, 20);
+  let round = 1;
+  // 至少跑满 rounds；若会话时长没到（例如默认 8 分钟）则继续刷，直到时长达标或到硬上限
+  while (round <= hardCap && (round <= rounds || Date.now() - sessionStart < sessionMs)) {
     const res = await processOne(cdp, ctx);
     results.push({ round, ...res });
     if (res.stop) break;
+    round++;
   }
+  const elapsedSecs = Math.round((Date.now() - sessionStart) / 1000);
+  console.log(`[session] ${Math.round(elapsedSecs / 60)}m${elapsedSecs % 60}s, notes=${results.length}`);
   cdp.close();
   console.log(JSON.stringify(results, null, 1));
 }

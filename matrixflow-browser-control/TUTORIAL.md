@@ -270,6 +270,11 @@ node scripts/xhs-marketing.mjs <窗口ID> inbox
 
 ## 常见问题（FAQ）
 
+**技能更新了，需要重新装/重开 MatrixFlow 吗？**
+- 技能脚本更新 → 只需更新技能（git pull 或重新安装仓库），MatrixFlow 客户端保持运行即可，**不用重装 exe**；
+- 只有涉及应用本身的功能（如任务栏窗口序号角标）才需要新版客户端（v1.10+）；
+- 改完技能后**开新会话**生效（或在当前会话让 AI 重新读一下技能说明）。
+
 **Q: DeepSeek 直连报 400/404？** Codex 用 Responses API，DeepSeek 只有 Chat API，必须用官方一键脚本或本地代理（见第二部分）。
 **Q: 换新电脑后"创建窗口失败"？** 先运行 `node scripts/mf-browser.mjs doctor` 自检。绝大多数原因是 MatrixFlow 客户端没登录（新建/删除/绑代理走云端），登录后重试；若提示"没有可用指纹模板"，先在客户端手动创建一个窗口。
 **Q: 技能提示 API 不可达？** 先启动 MatrixFlow 应用，再 `status`。
