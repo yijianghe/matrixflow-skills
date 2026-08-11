@@ -92,23 +92,114 @@ async function setFiles(cdp, files) {
   const doc = await cdp.send("DOM.getDocument", { depth: -1 });
   const q = await cdp.send("DOM.querySelector", {
     nodeId: doc.root.nodeId,
-    selector: 'input[type=file][accept*="image"]',
+    selector: '[role=dialog] input[type=file][accept*="image"]',
   });
-  if (!q.nodeId) throw new Error("找不到图片上传输入框");
+  if (!q.nodeId) {
+    const q2 = await cdp.send("DOM.querySelector", {
+      nodeId: doc.root.nodeId,
+      selector: 'input[type=file][accept*="image"]',
+    });
+    if (!q2.nodeId) throw new Error("找不到图片上传输入框");
+    await cdp.send("DOM.setFileInputFiles", { nodeId: q2.nodeId, files });
+    return;
+  }
   await cdp.send("DOM.setFileInputFiles", { nodeId: q.nodeId, files });
 }
 
 async function countAttachments(cdp) {
-  return (await ev(cdp, `[...document.querySelectorAll('img')].filter(i => i.naturalWidth > 50).length`)) || 0;
+  return (
+    (await ev(
+      cdp,
+      `(() => {
+        const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+        const withComposer = dialogs.find(d => (d.innerText || '').includes('添加更多内容')) || dialogs[0];
+        if (withComposer) return [...withComposer.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+        return 0;
+      })()`
+    )) || 0
+  );
+}
+
+// 处理群「互动必答题」：选 Both + Yes，同意规则，提交（很多公开群首次发帖需要）
+async function handleGroupQuestions(cdp) {
+  const positive = ["Both", "两者", "Yes", "是", "Agree", "同意", "我同意", "是，我同意", "是的", "Buyer", "买家"];
+  for (let pass = 0; pass < 15; pass++) {
+    const action = await ev(
+      cdp,
+      `(() => {
+        const positive = ${JSON.stringify(positive)};
+        const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+          const t = (x.innerText || '');
+          const r = x.getBoundingClientRect();
+          return r.width > 300 && r.bottom > 0 && (t.includes('互动必答题') || t.includes('首先请提交互动请求'));
+        });
+        if (!d) return 'none';
+        const vis = (e) => {
+          const r = e.getBoundingClientRect();
+          return r.width > 20 && r.height > 10 && r.bottom > 0 && r.top < innerHeight;
+        };
+        // 1) 找一个未选中的正面选项 label，返回中心坐标（由外层真实鼠标点击）
+        for (const text of positive) {
+          for (const opt of [...d.querySelectorAll('label')]) {
+            const t = (opt.textContent || '').trim();
+            const input = opt.querySelector('input');
+            if (t === text && vis(opt) && input && input.type === 'checkbox' && !input.checked) {
+              const r = opt.getBoundingClientRect();
+              return JSON.stringify({ action: 'click', x: r.x + r.width / 2, y: r.y + r.height / 2 });
+            }
+          }
+        }
+        // 2) 找未勾选的同意规则 checkbox
+        for (const opt of [...d.querySelectorAll('label')]) {
+          const t = (opt.textContent || '').trim();
+          const input = opt.querySelector('input');
+          if (/^我同意小组规则$|^同意小组规则$|^我同意$|^I agree$|^Agree$/.test(t) && input && input.type === 'checkbox' && !input.checked && vis(opt)) {
+            const r = opt.getBoundingClientRect();
+            return JSON.stringify({ action: 'click', x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          }
+        }
+        // 3) 滚动弹窗内容露出更多选项
+        for (const s of [...d.querySelectorAll('*')]) {
+          if (s.scrollHeight > s.clientHeight + 20 && s.clientHeight > 100 && s.scrollTop < s.scrollHeight - s.clientHeight - 5) {
+            s.scrollTop += 300;
+            return JSON.stringify({ action: 'scrolled' });
+          }
+        }
+        // 4) 点可用的提交按钮（注意可能有禁用副本，要 aria-disabled 非 true 的那个）
+        const submit = [...d.querySelectorAll('div[role=button]')].find(e => {
+          const t = (e.textContent || '').trim();
+          return (t === '提交' || t === 'Submit') && vis(e) && e.getAttribute('aria-disabled') !== 'true';
+        });
+        if (submit) {
+          const r = submit.getBoundingClientRect();
+          return JSON.stringify({ action: 'submit', x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        }
+        return JSON.stringify({ action: 'stuck' });
+      })()`
+    );
+    if (action === 'none') return true;
+    const parsed = JSON.parse(action);
+    if (parsed.action === 'stuck') return false;
+    if (parsed.action === 'scrolled') { await sleep(900); continue; }
+    if (parsed.action === 'click' || parsed.action === 'submit') {
+      await clickAt(cdp, parsed.x, parsed.y);
+      console.log(`[group] 互动题: ${parsed.action}`);
+    }
+    await sleep(1200);
+  }
+  return true;
 }
 
 async function typeText(cdp, text) {
   const pos = await ev(
     cdp,
     `(() => {
-      const els = [...document.querySelectorAll('div[contenteditable=true]')]
+      const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+      const withImg = dialogs.find(d => [...d.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1);
+      const source = withImg || dialogs.find(d => (d.innerText || '').includes('添加更多内容')) || null;
+      const els = [...(source || document).querySelectorAll('div[contenteditable=true]')]
         .map(e => ({ e, r: e.getBoundingClientRect() }))
-        .filter(o => o.r.width > 100 && o.r.height > 20)
+        .filter(o => o.r.width > 100 && o.r.height >= 15)
         .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
       const el = els[0] && els[0].e;
       if (!el) return null;
@@ -125,7 +216,10 @@ async function typeText(cdp, text) {
   await ev(
     cdp,
     `(() => {
-      const els = [...document.querySelectorAll('div[contenteditable=true]')]
+      const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+      const withImg = dialogs.find(d => [...d.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1);
+      const source = withImg || dialogs.find(d => (d.innerText || '').includes('添加更多内容')) || null;
+      const els = [...(source || document).querySelectorAll('div[contenteditable=true]')]
         .map(e => ({ e, r: e.getBoundingClientRect() }))
         .filter(o => o.r.width > 40)
         .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
@@ -179,7 +273,8 @@ async function main() {
   if (!dir) throw new Error(`Profile ${profileId} is not running`);
   const port = Number.parseInt(readFileSync(join(dir, "DevToolsActivePort"), "utf8").trim().split(/\r?\n/)[0], 10);
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(10_000) })).json();
-  const page = (Array.isArray(targets) ? targets : []).find((t) => t.type === "page");
+  const page = (Array.isArray(targets) ? targets : []).find((t) => t.type === "page" && /facebook\.com/.test(t.url || ""))
+    || (Array.isArray(targets) ? targets : []).find((t) => t.type === "page");
   if (!page) throw new Error("No page target");
   const cdp = makeCdp(page.webSocketDebuggerUrl);
   const started = Date.now();
@@ -194,21 +289,27 @@ async function main() {
     } else {
       const searchUrl = `https://www.facebook.com/search/groups?q=${encodeURIComponent(keyword)}`;
       await cdp.send("Page.navigate", { url: searchUrl });
-      await sleep(6000);
-      const groups = await ev(
-        cdp,
-        `(() => {
-          const links = [...document.querySelectorAll('a[href*="/groups/"]')]
-            .filter(a => {
-              const href = a.getAttribute('href') || '';
-              const r = a.getBoundingClientRect();
-              return !href.includes('/groups/you') && r.width > 100 && r.height > 20 && r.bottom > 0 && r.top < innerHeight;
-            })
-            .map(a => a.href);
-          return JSON.stringify([...new Set(links)].slice(0, 5));
-        })()`
-      );
-      const list = groups ? JSON.parse(groups) : [];
+      let list = [];
+      for (let attempt = 0; attempt < 5 && !list.length; attempt++) {
+        await sleep(attempt === 0 ? 7000 : 3000);
+        const groups = await ev(
+          cdp,
+          `(() => {
+            const links = [...document.querySelectorAll('a[href*="/groups/"]')]
+              .filter(a => {
+                const href = a.href || a.getAttribute('href') || '';
+                const r = a.getBoundingClientRect();
+                const m = href.match(/facebook\\.com\\/groups\\/([A-Za-z0-9._-]+)/);
+                const groupId = m ? m[1] : '';
+                const bad = ['you', 'feed', 'discover', 'requests', 'invites', 'bookmarks', 'saved', 'settings', 'create', 'joined', 'pinned', 'search'];
+                return groupId.length > 2 && !bad.includes(groupId.toLowerCase()) && !href.includes('?q=') && r.width > 50 && r.height > 15 && r.bottom > 0 && r.top < innerHeight;
+              })
+              .map(a => a.href);
+            return JSON.stringify([...new Set(links)].slice(0, 5));
+          })()`
+        );
+        list = groups ? JSON.parse(groups) : [];
+      }
       if (!list.length) throw new Error(`未搜到小组（关键词: ${keyword}）`);
       const pick = list[Math.floor(Math.random() * Math.min(list.length, 3))];
       console.log(`[group] 进入小组: ${pick}`);
@@ -216,19 +317,61 @@ async function main() {
       await sleep(6000);
     }
 
+    // 1.5) 未加入的小组先点「加入小组」再加入（之后才能发帖）
+    for (let joinTry = 0; joinTry < 3; joinTry++) {
+      const joinBtn = await ev(
+        cdp,
+        `(() => {
+          const btn = [...document.querySelectorAll('[role=button]')].find(b => {
+            const t = (b.textContent || '').trim();
+            const r = b.getBoundingClientRect();
+            return (t === '加入小组' || t === 'Join Group' || /^加入小组$/.test(t)) && r.width > 50 && r.height > 20 && r.bottom > 0 && r.top < innerHeight;
+          });
+          if (!btn) return null;
+          const r = btn.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()`
+      );
+      if (!joinBtn) {
+        await sleep(2500);
+        continue;
+      }
+      const jb = JSON.parse(joinBtn);
+      await clickAt(cdp, jb.x, jb.y);
+      console.log("[group] 已点击「加入小组」");
+      await sleep(4000);
+    }
+
     // 2) 点击群内发布框（"写点什么..."）
     let composerOpen = false;
     for (let i = 0; i < 12 && !composerOpen; i++) {
-      composerOpen = (await ev(cdp, `document.querySelectorAll('div[contenteditable=true]').length > 0`)) === true;
+      // 有些公开群首次发帖会弹「互动必答题」，先处理掉
+      if (i === 0 || i === 4 || i === 8) {
+        await handleGroupQuestions(cdp);
+      }
+      composerOpen = (await ev(cdp, `[...document.querySelectorAll('div[contenteditable=true]')].some(e => e.getBoundingClientRect().width > 300 && e.getBoundingClientRect().height > 20)`)) === true;
       if (composerOpen) break;
       const trig = await ev(
         cdp,
         `(() => {
-          const el = [...document.querySelectorAll('div[role=button],div,span')].find(e => {
-            const t = (e.textContent || '').trim();
+          const vis = (e) => {
             const r = e.getBoundingClientRect();
-            return (t.includes('写点什么') || t.includes('分享你的想法') || t.includes('What\\'s on your mind')) && r.width > 100 && r.width < 900 && r.height > 20 && r.bottom > 0 && r.top < innerHeight;
+            return r.width > 50 && r.width < 900 && r.height > 15 && r.bottom > 0 && r.top < innerHeight;
+          };
+          const exact = [...document.querySelectorAll('div[role=button]')].find(e => {
+            const t = (e.textContent || '').trim();
+            return (t === '写点什么...' || t === '写点什么') && vis(e);
           });
+          const el = exact || [...document.querySelectorAll('div[role=button],div,span')]
+            .filter(e => {
+              const t = (e.textContent || '').trim();
+              const r = e.getBoundingClientRect();
+              return (t.includes('写点什么') || t.includes('分享你的想法') || t.includes('What\\'s on your mind')) && r.width > 100 && r.width < 900 && r.height > 20 && r.bottom > 0 && r.top < innerHeight;
+            })
+            .sort((a, b) => {
+              const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+              return (ra.width * ra.height) - (rb.width * rb.height);
+            })[0];
           if (!el) return null;
           const r = el.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -239,6 +382,28 @@ async function main() {
         await clickAt(cdp, t.x, t.y + rand(-4, 4));
       }
       await sleep(900);
+    }
+    // 2.5) 已加入但发布框仍是内嵌未展开时，点击「写点什么」正文区
+    if (!composerOpen) {
+      const trig2 = await ev(
+        cdp,
+        `(() => {
+          const el = [...document.querySelectorAll('div[role=button]')].find(e => {
+            const t = (e.textContent || '').trim();
+            const r = e.getBoundingClientRect();
+            return (t === '写点什么...' || t === '写点什么') && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;
+          });
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()`
+      );
+      if (trig2) {
+        const t = JSON.parse(trig2);
+        await clickAt(cdp, t.x, t.y + rand(-4, 4));
+        await sleep(1200);
+        composerOpen = (await ev(cdp, `[...document.querySelectorAll('div[contenteditable=true]')].some(e => e.getBoundingClientRect().width > 300 && e.getBoundingClientRect().height > 20)`)) === true;
+      }
     }
     if (!composerOpen) throw new Error("群内发布框没有打开（可能未加入该小组）");
     await sleep(1200);

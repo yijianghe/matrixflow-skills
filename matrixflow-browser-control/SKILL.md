@@ -300,6 +300,10 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
 - 首次导入（推荐）：打开一个窗口 → 在浏览器里打开 Automa 面板（chrome-extension:// Automa dashboard）
   → 工作流 → 导入 → 用 `upload` 命令把 `fb-auto-posting.automa.json` 注入文件选择框完成导入；
 - 更新内容：`node scripts/mf-browser.mjs workflow-import resources/automa-workflows/fb-auto-posting.automa.json fb_auto "Facebook自动化"`。
+  > 注意（2026-08-11）：MatrixFlow 云端的 `workflow/sync` 接口当前不可用（init 创建的 stub 无法被
+  > sync 找到，往返同步也会 500「Workflow not found」），`workflow-import` 可能只导入出 1 个 trigger。
+  > 遇到「工作流内容空/只有 1 个节点」时，改用 Automa 面板手动导入：
+  > `automa-window` 打开工作台 → 工作流 → 导入 → 选 `fb-auto-posting.automa.json`。
 
 **Automa 独立工作台窗口（2026-08-11 新增，类似比特浏览器）**：
 ```bash
@@ -366,6 +370,25 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 - 自动关闭叠层空发布框（Facebook 会渲染两个 composer，空的叠在上面会挡住发帖）；
 - 发帖按钮中文「发帖」/ 英文「Post」，合成事件 + 真实坐标点击双保险、失败自动重试；
 - 文案历史去重：`<userData>/fb-post-history.json`，相似度 >0.55 拒绝二发。
+
+**v6 关键修正（2026-08-11 实测验证）**：
+- **公开可见设置修复**：之前设「公开」偶发失效（帖子以「你的好友」发出）。根因有两个：
+  校验时可能读到另一层重复发布框的隐私按钮、以及隐私弹窗渲染时序未就绪导致点空。现在：
+  - 发布前设公开带 **3 次重试**，每次间隔更长；
+  - 校验锁定「带图弹窗」内的隐私按钮文字，`编辑隐私设置。分享对象：公开。` 才算成功；
+  - 2026-08-11 已在 脸书4 实测发布成功，个人主页显示「分享对象：公开」；
+- **发布框打开加固**：自动先关掉「创建 PIN 码」等遮挡弹窗；找不到「分享你的新鲜事」按钮时
+  用文本兜底点击；最多重试 20 次；
+- **群组发帖修复（fb-group-post.mjs）**：
+  - 群链接过滤：排除 `/groups/` 根地址、`/groups/you` 等无效链接，只进真实小组；
+  - 未加入的小组自动点「加入小组」（最多 3 次）；
+  - 首次发帖的「互动必答题」自动处理：逐一点未勾选的正面选项（Both/Yes/Agree/同意/是）、
+    滚动弹窗露出更多选项、勾选规则、点可用的「提交」（注意存在禁用的提交副本，
+    要点 `aria-disabled` 非 true 的那个）；
+  - 群发布框图片：锁定 `[role=dialog] input[type=file]` 注入，预览计数只看弹窗内图片；
+  - 群发布框文案：编辑框高度 ≥15px 即可（群弹窗里是 20px 单行，之前被「高度>20」过滤掉导致
+    「群内文案输入失败」）；
+  - 2026-08-11 已在公开小组实测发布成功（自动加入 → 图文同框 → 提交）；
 
 **配套工具**：
 - `fb-set-public.mjs <profileId>`：把当前发布框/帖子可见范围改成「公开」；

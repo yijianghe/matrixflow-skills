@@ -115,6 +115,36 @@ async function clickAt(cdp, x, y) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
 }
 
+// 关闭可能遮挡发布框的系统弹窗（如「创建 PIN 码」/聊天加密提示），避免挡住发布流程
+async function dismissOverlays(cdp) {
+  for (let round = 0; round < 3; round++) {
+    const target = await ev(
+      cdp,
+      `(() => {
+        const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+          const r = x.getBoundingClientRect();
+          const t = (x.innerText || '');
+          return r.width > 100 && r.bottom > 0 && (t.includes('创建 PIN 码') || t.includes('加密') || /稍后|以后再说|现在不|暂不|跳过/.test(t.slice(0, 200)));
+        });
+        if (!d) return null;
+        const closeBtn = [...d.querySelectorAll('div[role=button]')].find(b => {
+          const a = (b.getAttribute('aria-label') || '');
+          const t = (b.textContent || '');
+          const r = b.getBoundingClientRect();
+          return (a.includes('关闭') || /稍后|以后再说|现在不|暂不|跳过/.test(t)) && r.width > 20 && r.bottom > 0 && r.top < innerHeight;
+        });
+        if (!closeBtn) return null;
+        const r = closeBtn.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()`
+    );
+    if (!target) return;
+    const t = JSON.parse(target);
+    await clickAt(cdp, t.x, t.y);
+    await sleep(800);
+  }
+}
+
 // 找到真正在顶层的发布框（elementFromPoint 命中自身才算可见）
 async function visibleDialogSelector(cdp, probeText) {
   return await ev(
@@ -215,22 +245,19 @@ async function typeTextInPhotoEditor(cdp, text) {
   const p = JSON.parse(pos);
   await clickAt(cdp, p.x, p.y); // 真实点击聚焦（不滚动），ProseMirror 才能接受输入
   await sleep(300);
-  await ev(
+  const focused = await ev(
     cdp,
     `(() => {
       const el = document.querySelector('[data-mf-photo-ce]');
       if (!el) return false;
       el.focus();
-      el.innerHTML = '';
-      const sel = getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      return document.execCommand('insertText', false, ${JSON.stringify(text)});
+      return true;
     })()`
   );
+  if (focused) {
+    // Lexical/ProseMirror 编辑器对 execCommand 无效，改用 CDP 真实键盘输入
+    await cdp.send("Input.insertText", { text });
+  }
   await sleep(400);
   return true;
 }
@@ -400,97 +427,105 @@ async function setPostPublic(cdp, probeText) {
 
 // 发布前：在发布框内把可见范围设为「公开」（作用在带图弹窗上，点完再验证）
 async function setComposerPublic(cdp, probe) {
-  const priv = await ev(
-    cdp,
-    `(() => {
-      const dialogs = [...document.querySelectorAll('[role=dialog]')]
-        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-      const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
-        || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}))
-        || dialogs[0];
-      if (!d) return null;
-      const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
-        const a = (e.getAttribute('aria-label') || '');
-        const r = e.getBoundingClientRect();
-        return a.startsWith('编辑隐私设置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
-      });
-      if (!btn) return null;
-      btn.setAttribute('data-mf-privc', '1');
-      const r = btn.getBoundingClientRect();
-      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-    })()`
-  );
-  if (!priv) return false;
-  const p = JSON.parse(priv);
-  await clickAt(cdp, p.x, p.y);
-  await sleep(1000);
-  const pubRow = await ev(
-    cdp,
-    `(() => {
-      const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
-      const scope = dlg || document;
-      const el = [...scope.querySelectorAll('div')]
-        .filter(e => {
-          const t = (e.textContent || '').trim();
+  // 重试 3 次：首次可能因隐私弹窗渲染时序未就绪导致点空
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const priv = await ev(
+      cdp,
+      `(() => {
+        const dialogs = [...document.querySelectorAll('[role=dialog]')]
+          .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+        const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
+          || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}))
+          || dialogs[0];
+        if (!d) return null;
+        const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
+          const a = (e.getAttribute('aria-label') || '');
           const r = e.getBoundingClientRect();
-          return t.startsWith('公开') && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
-        })
-        .sort((a, b) => {
-          const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-          return (ra.width * ra.height) - (rb.width * rb.height);
-        })[0];
-      if (!el) return null;
-      // 关键：点「公开」行内的单选圆点（实测点整行不生效，点 radio 才生效）
-      const radio = el.querySelector('input[type=radio]');
-      const r = radio ? radio.getBoundingClientRect() : el.getBoundingClientRect();
-      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-    })()`
-  );
-  if (pubRow) {
-    const u = JSON.parse(pubRow);
-    await clickAt(cdp, u.x, u.y);
-    await sleep(800);
+          return a.startsWith('编辑隐私设置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
+        });
+        if (!btn) return null;
+        btn.setAttribute('data-mf-privc', '1');
+        const r = btn.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()`
+    );
+    if (priv) {
+      const p = JSON.parse(priv);
+      await clickAt(cdp, p.x, p.y);
+      await sleep(1200);
+    }
+    const pubRow = await ev(
+      cdp,
+      `(() => {
+        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+        const scope = dlg || document;
+        const el = [...scope.querySelectorAll('div')]
+          .filter(e => {
+            const t = (e.textContent || '').trim();
+            const r = e.getBoundingClientRect();
+            return t.startsWith('公开') && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
+          })
+          .sort((a, b) => {
+            const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+            return (ra.width * ra.height) - (rb.width * rb.height);
+          })[0];
+        if (!el) return null;
+        // 关键：点「公开」行内的单选圆点（实测点整行不生效，点 radio 才生效）
+        const radio = el.querySelector('input[type=radio]');
+        const r = radio ? radio.getBoundingClientRect() : el.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()`
+    );
+    if (pubRow) {
+      const u = JSON.parse(pubRow);
+      await clickAt(cdp, u.x, u.y);
+      await sleep(1200);
+    }
+    const done = await ev(
+      cdp,
+      `(() => {
+        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+        const scope = dlg || document;
+        const el = [...scope.querySelectorAll('div[role=button]')].find(e => {
+          const a = (e.getAttribute('aria-label') || '');
+          const r = e.getBoundingClientRect();
+          return a.startsWith('完成') && r.bottom > 0 && r.top < innerHeight && r.width > 30;
+        });
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()`
+    );
+    if (done) {
+      const d = JSON.parse(done);
+      await clickAt(cdp, d.x, d.y);
+      await sleep(1200);
+    }
+    // 验证发布框可见范围
+    const label = await ev(
+      cdp,
+      `(() => {
+        const dialogs = [...document.querySelectorAll('[role=dialog]')]
+          .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+        const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
+          || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}));
+        if (!d) return '';
+        const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
+          const a = (e.getAttribute('aria-label') || '');
+          const r = e.getBoundingClientRect();
+          return a.startsWith('编辑隐私设置') && r.width > 20;
+        });
+        return btn ? (btn.getAttribute('aria-label') || '') : '';
+      })()`
+    );
+    const ok = /公开|Public/.test(label || "");
+    console.log(`[fb] 发布前可见范围: ${label || "未知"} ${ok ? "✅ 公开" : "❌ 未公开"}${attempt > 0 ? `（第 ${attempt + 1} 次尝试）` : ""}`);
+    if (ok) return true;
+    // 未成功：如果隐私菜单还开着，先按 Esc / 点完成关闭，再重试
+    await ev(cdp, `(() => { const b = document.querySelector('[data-mf-privc="1"]'); if (b) b.click(); return true; })()`).catch(() => {});
+    await sleep(600);
   }
-  const done = await ev(
-    cdp,
-    `(() => {
-      const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
-      const scope = dlg || document;
-      const el = [...scope.querySelectorAll('div[role=button]')].find(e => {
-        const a = (e.getAttribute('aria-label') || '');
-        const r = e.getBoundingClientRect();
-        return a.startsWith('完成') && r.bottom > 0 && r.top < innerHeight && r.width > 30;
-      });
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-    })()`
-  );
-  if (done) {
-    const d = JSON.parse(done);
-    await clickAt(cdp, d.x, d.y);
-    await sleep(800);
-  }
-  // 验证发布框可见范围
-  const label = await ev(
-    cdp,
-    `(() => {
-      const dialogs = [...document.querySelectorAll('[role=dialog]')]
-        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-      const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
-        || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}));
-      if (!d) return '';
-      const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
-        const a = (e.getAttribute('aria-label') || '');
-        const r = e.getBoundingClientRect();
-        return a.startsWith('编辑隐私设置') && r.width > 20;
-      });
-      return btn ? (btn.getAttribute('aria-label') || '') : '';
-    })()`
-  );
-  const ok = /公开|Public/.test(label || "");
-  console.log(`[fb] 发布前可见范围: ${label || "未知"} ${ok ? "✅ 公开" : "❌ 未公开"}`);
-  return ok;
+  return false;
 }
 
 function dedupCheck(text) {
@@ -571,19 +606,21 @@ async function main() {
       await sleep(4000);
     }
 
-    // 1) 打开发布框
+    // 1) 打开发布框（先关掉可能遮挡的弹窗，如「创建 PIN 码」提示）
+    await dismissOverlays(cdp);
     let composerOpen = false;
-    for (let i = 0; i < 15 && !composerOpen; i++) {
-      composerOpen = (await ev(cdp, `document.querySelectorAll('div[contenteditable=true]').length > 0`)) === true;
+    for (let i = 0; i < 20 && !composerOpen; i++) {
+      composerOpen = (await ev(cdp, `[...document.querySelectorAll('div[contenteditable=true]')].some(e => e.getBoundingClientRect().width > 100 && e.getBoundingClientRect().bottom > 0)`)) === true;
       if (composerOpen) break;
       const trig = await ev(
         cdp,
         `(() => {
-          const el = [...document.querySelectorAll('div[role=button]')].find(e => {
+          const find = (role) => [...document.querySelectorAll(role)].find(e => {
             const t = (e.textContent || '').trim();
             const r = e.getBoundingClientRect();
-            return t.includes('分享你的新鲜事') && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;
+            return (t.includes('分享你的新鲜事') || t.includes('分享想法')) && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;
           });
+          const el = find('div[role=button]') || find('[role=button]');
           if (!el) return null;
           const r = el.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -592,6 +629,21 @@ async function main() {
       if (trig) {
         const t = JSON.parse(trig);
         await clickAt(cdp, t.x, t.y + rand(-4, 4));
+      } else {
+        // 兜底：直接点页面顶部「创建帖子」区域（新界面有时不是 role=button）
+        await ev(cdp, `(() => {
+          const el = [...document.querySelectorAll('div')].find(e => {
+            const t = (e.textContent || '').trim();
+            const r = e.getBoundingClientRect();
+            return t.startsWith('创建帖子') && t.includes('分享你的新鲜事') && r.width > 400 && r.width < 800 && r.height > 30 && r.height < 100 && r.bottom > 0 && r.top < innerHeight;
+          });
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }));
+          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }));
+          el.click();
+          return true;
+        })()`);
       }
       await sleep(800);
     }
