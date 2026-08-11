@@ -2176,7 +2176,7 @@
           "saveData": false,
           "selectOptionBy": "value",
           "selected": true,
-          "selector": "textarea.textbox",
+          "selector": "[role=\"dialog\"] div[contenteditable=\"true\"]",
           "settings": {
             "blockTimeout": 0,
             "debugMode": true

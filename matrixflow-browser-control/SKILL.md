@@ -398,6 +398,19 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
     「群内文案输入失败」）；
   - 2026-08-11 已在公开小组实测发布成功（自动加入 → 图文同框 → 提交）；
 
+**v7 图文不丢 + 自动配图（2026-08-11 优化）**：
+- **「传图后文案消失」根因修复**：Automa 工作流里发帖文字用的还是旧选择器 `textarea.textbox`，
+  当前 Facebook 已改成 contenteditable div，文字根本没写进去 → 帖子只有图没有文。
+  已把工作流 node 90 的选择器改为 `[role="dialog"] div[contenteditable="true"]`；
+- **发布框强制回首页**：fb-post.mjs 之前只在「非 facebook.com」时才导航首页，
+  如果标签页停在搜索页会一直找不到发布框。现在只要不是首页就强制导航 `facebook.com/`；
+- **自动挑图（每次图片不一样）**：不传 `--image` 时自动扫描
+  `Documents\ShareX\Screenshots`、`Downloads`、`Pictures`、`%APPDATA%\@matrixflow\desktop\fb-images`
+  里的图片，并记录已用图（`fb-images-used.json`），自动避开最近用过的，保证每帖配图不同；
+  可用环境变量 `FB_IMAGES_DIR` 指定专属素材目录；
+- **多图支持**：默认 1 张（FB 多图易触发「内容冲突」）；显式 `--multi` 时最多 3 张；
+- 文案不重复靠 `fb-post-history.json` 相似度去重（>0.55 拒绝二发），配图不重复靠 `fb-images-used.json`。
+
 **配套工具**：
 - `fb-set-public.mjs <profileId>`：把当前发布框/帖子可见范围改成「公开」；
 - `fb-type-prose.mjs <profileId> <textFile>`：逐行输入（换行=Enter）；

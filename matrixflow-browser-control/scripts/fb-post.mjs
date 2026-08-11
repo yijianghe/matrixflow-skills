@@ -549,6 +549,69 @@ function dedupCheck(text) {
   return hist;
 }
 
+// 自动挑选未用过的图片（2026-08-11 新增）：扫描素材文件夹，避开最近用过的，保证每次配图不一样
+function autoPickImages(count = 1) {
+  const userData = resolveUserDataRoot();
+  const usedPath = join(userData, "fb-images-used.json");
+  const used = existsSync(usedPath) ? JSON.parse(readFileSync(usedPath, "utf8") || "[]") : [];
+  const usedSet = new Set(used.map((p) => String(p).toLowerCase()));
+  const home = homedir();
+  const folders = [
+    process.env.FB_IMAGES_DIR,
+    join(home, "Documents", "ShareX", "Screenshots"),
+    join(home, "Downloads"),
+    join(home, "Pictures"),
+    join(userData, "fb-images"),
+  ].filter(Boolean);
+  const exts = /\.(png|jpe?g|webp|gif)$/i;
+  const candidates = [];
+  for (const folder of folders) {
+    if (!existsSync(folder)) continue;
+    let entries;
+    try {
+      entries = readdirSync(folder, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      const full = join(folder, e.name);
+      if (!exts.test(e.name)) continue;
+      if (usedSet.has(String(full).toLowerCase())) continue;
+      candidates.push(full);
+    }
+  }
+  if (!candidates.length) {
+    console.warn("[fb] 素材文件夹里没有未用过的图片，回退到全部图片（含已用）");
+    for (const folder of folders) {
+      if (!existsSync(folder)) continue;
+      let entries;
+      try {
+        entries = readdirSync(folder, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        if (e.isFile() && exts.test(e.name)) candidates.push(join(folder, e.name));
+      }
+    }
+  }
+  // 随机洗牌取 count 张
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+  const picked = candidates.slice(0, count);
+  if (picked.length) {
+    const now = used.concat(picked.map((p) => String(p)));
+    writeFileSync(usedPath, JSON.stringify(now.slice(-200)), "utf8");
+    console.log(`[fb] 自动挑图 ${picked.length} 张（素材库共 ${candidates.length} 张未用图）`);
+  } else {
+    console.warn("[fb] 没有找到可用图片，将发纯文字帖");
+  }
+  return picked;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const profileSpec = args[0];
@@ -563,6 +626,7 @@ async function main() {
   let location = "";
   let randomLocation = false;
   let noPost = false;
+  let multi = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--text-file") textFile = args[++i] || "";
     else if (args[i] === "--image") images.push(args[++i] || "");
@@ -571,6 +635,7 @@ async function main() {
     else if (args[i] === "--location") location = args[++i] || "";
     else if (args[i] === "--random-location") randomLocation = true;
     else if (args[i] === "--no-post") noPost = true;
+    else if (args[i] === "--multi") multi = true;
   }
   if (!textFile || !existsSync(textFile)) {
     console.error("请提供存在的 --text-file");
@@ -578,10 +643,18 @@ async function main() {
   }
   const text = readFileSync(textFile, "utf8").trim();
   const probe = text.slice(0, 8);
-  // 实测：一次传多张图会触发 FB「内容冲突」并禁用发帖；每帖稳定使用 1 张图
-  let files = [...images, ...(video ? [video] : [])].filter((f) => f && existsSync(f));
-  if (files.length > 1) {
-    console.log(`[fb] 检测到 ${files.length} 个附件，为稳定图文同框，本帖使用第 1 个: ${files[0].split(/[\\/]/).pop()}`);
+  // 图片策略（2026-08-11 优化）：
+  // - 没指定图片时自动从素材文件夹挑，且避开最近用过的图（保证每次图片不一样）
+  // - 默认 1 张（FB 多图易触发「内容冲突」）；显式 --multi 时才允许最多 3 张
+  let files = [];
+  if (!images.length && !video) {
+    files = autoPickImages(multi ? 3 : 1);
+  } else {
+    files = [...images, ...(video ? [video] : [])].filter((f) => f && existsSync(f));
+  }
+  if (files.length > 3) files = files.slice(0, 3);
+  if (!multi && files.length > 1 && !video) {
+    console.log(`[fb] 未启用 --multi，本帖使用第 1 个附件: ${files[0].split(/[\\/]/).pop()}`);
     files = files.slice(0, 1);
   }
   const hist = dedupCheck(text);
@@ -601,9 +674,11 @@ async function main() {
     // 全程拦截系统文件选择对话框（防止弹出 Windows 文件窗口）
     await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true });
     const url = await ev(cdp, "location.href");
-    if (!/facebook\.com/.test(url || "")) {
+    // 2026-08-11 修复：必须回到首页发布框。之前只在非 facebook.com 时导航，
+    // 如果标签页停在搜索页/帖子页就会一直找不到发布框。
+    if (!/facebook\.com\/\??$/.test(url || "")) {
       await cdp.send("Page.navigate", { url: "https://www.facebook.com/" });
-      await sleep(4000);
+      await sleep(4500);
     }
 
     // 1) 打开发布框（先关掉可能遮挡的弹窗，如「创建 PIN 码」提示）
