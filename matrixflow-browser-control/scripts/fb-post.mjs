@@ -21,6 +21,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
@@ -176,6 +177,15 @@ async function visibleDialogSelector(cdp, probeText) {
 
 async function attachViaChooser(cdp, files) {
   // 点击可见层的「照片/视频」→ 拦截系统文件选择器 → 注入（图片进顶层弹窗）
+  const scriptDir = import.meta.dirname;
+  const closeDlg = () => {
+    try {
+      spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(scriptDir, "close-file-dialog.ps1")], {
+        windowsHide: true,
+        timeout: 8000,
+      });
+    } catch {}
+  };
   await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true });
   const chooser = new Promise((resolve) => cdp.once("Page.fileChooserOpened", resolve));
   const btn = await ev(
@@ -198,7 +208,13 @@ async function attachViaChooser(cdp, files) {
     chooser,
     new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
   ]);
-  if (!event || !event.backendNodeId) return false;
+  if (!event || !event.backendNodeId) {
+    // 拦截没生效：很可能弹出了原生 Windows「打开」对话框挡住了浏览器
+    console.warn("[fb] 文件选择框未拦截到，关闭可能弹出的系统对话框后重试直接注入");
+    closeDlg();
+    await sleep(1200);
+    return false;
+  }
   await cdp.send("DOM.setFileInputFiles", { nodeId: event.backendNodeId, files });
   return true;
 }
@@ -671,6 +687,14 @@ async function main() {
   try {
     await cdp.send("Runtime.enable");
     await cdp.send("Page.bringToFront").catch(() => {});
+    // 2026-08-11：先关掉可能残留/弹出的系统「打开」文件对话框，避免挡住后续操作
+    try {
+      const scriptDir = import.meta.dirname;
+      spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(scriptDir, "close-file-dialog.ps1")], {
+        windowsHide: true,
+        timeout: 8000,
+      });
+    } catch {}
     // 全程拦截系统文件选择对话框（防止弹出 Windows 文件窗口）
     await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true });
     const url = await ev(cdp, "location.href");
