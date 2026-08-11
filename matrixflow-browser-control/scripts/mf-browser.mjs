@@ -704,21 +704,39 @@ async function cmdUpload(profileSpec, ...files) {
 
 async function cmdAutomaOpen(args) {
   const workflowId = args[0];
-  let profileId = "";
   let workflowName = "";
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === "--profile") profileId = args[++i] || "";
-    else if (args[i] === "--name") workflowName = args[++i] || "";
+    if (args[i] === "--name") workflowName = args[++i] || "";
   }
-  if (!workflowId) throw new Error("Usage: automa-open <workflowId> [--profile <id>] [--name <name>]");
-  if (profileId) {
-    profileId = await resolveProfileId(profileId, { allowOffline: true });
+  if (!workflowId) throw new Error("Usage: automa-open <workflowId> [--name <name>]");
+  const userDataRoot = resolveUserDataRoot();
+  const extCandidates = [
+    join(userDataRoot, "automa-browser-extension"),
+    "D:\\Zrrssglxt\\MatrixFlow\\resources\\automa-electron",
+  ];
+  const extDir = extCandidates.find((p) => existsSync(join(p, "manifest.json")));
+  let extId = "eijjdlencjmcoobbfakolpfgckgidocd";
+  if (extDir) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(extDir, "manifest.json"), "utf8"));
+      if (manifest.key) extId = extensionIdFromKey(manifest.key);
+    } catch {}
   }
-  const r = await api("/api/v1/matrixflow/automa/open", {
-    method: "POST",
-    body: { workflowId, profileId, workflowName }
-  });
-  console.log(JSON.stringify(r.data, null, 2));
+  let token = "";
+  try {
+    token = resolveToken();
+  } catch {}
+  // 2026-08-11 实测：designer URL 会被 Chromium 拦截（ERR_BLOCKED_BY_CLIENT），
+  // #/workflows/<id> hash 也会被守卫改回列表。因此统一打开工作台列表页（干净、无地址栏），
+  // 用户在 Automa 窗口内点击目标工作流即可进入设计器。
+  const params = new URLSearchParams({ locale: "zh-CN", mfOpenMode: "dashboard" });
+  if (token) {
+    params.set("mfToken", token);
+    params.set("mfApiBase", baseUrl());
+  }
+  const fullUrl = `chrome-extension://${extId}/newtab.html?${params.toString()}#/workflows`;
+  // 不再走 App 的 automa/open 接口（那个会在业务窗口里开带地址栏的窗口）。
+  await launchAutomaWorkbench(fullUrl, "automa-open" + (workflowName ? ":" + workflowName : ""));
 }
 
 async function cmdWorkflowCreate(workflowId, name) {
@@ -785,7 +803,8 @@ function extensionIdFromKey(base64Key) {
  * 单独启动一个 Automa 工作台窗口（独立窗口 + Automa 图标，类似比特浏览器）。
  * 不占用业务窗口：用独立的轻量 profile 目录，--app 模式打开 Automa 扩展页。
  */
-async function cmdAutomaWindow(profileSpec) {
+// 共用：启动独立 Automa 工作台窗口（--app + automa-workbench profile，无地址栏、Automa 图标）
+async function launchAutomaWorkbench(fullUrl, mode) {
   const userDataRoot = resolveUserDataRoot();
   const exeCandidates = [
     process.env.MF_BROWSER_EXE,
@@ -899,23 +918,6 @@ public static class AutomaLnk {
     }
   } catch {}
 
-  // 携带本地 API Token 让 Automa 工作台同步 MatrixFlow 的工作流（否则新 profile 里看不到已有工作流）
-  let token = "";
-  try {
-    token = resolveToken();
-  } catch {}
-  const params = new URLSearchParams({ locale: "zh-CN", mfOpenMode: "dashboard" });
-  if (token) {
-    params.set("mfToken", token);
-    params.set("mfApiBase", baseUrl());
-  }
-  const fullUrl = `chrome-extension://${extId}/newtab.html?${params.toString()}#/workflows`;
-
-  // 2026-08-11 实测：在业务窗口里 Target.createTarget(newWindow) 打开的面板渲染空白/被屏蔽，
-  // 只有独立工作台（--app + automa-workbench profile）能正常显示「Dashboard - Automa」。
-  // 因此一律走独立工作台模式（类似比特浏览器），不再在业务窗口新开窗口。
-  void profileSpec;
-
   // 独立工作台（--app，Automa 图标）
   const args = [
     `--user-data-dir=${workbench}`,
@@ -937,7 +939,37 @@ public static class AutomaLnk {
   await new Promise((r) => setTimeout(r, 1200));
   const child = spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: false });
   child.unref();
-  console.log(JSON.stringify({ ok: true, mode: "automa-window", exe, extId, url: fullUrl, profile: workbench }, null, 2));
+  console.log(JSON.stringify({ ok: true, mode, exe, extId, url: fullUrl, profile: workbench }, null, 2));
+}
+
+async function cmdAutomaWindow(profileSpec) {
+  void profileSpec;
+  const userDataRoot = resolveUserDataRoot();
+  const extCandidates = [
+    join(userDataRoot, "automa-browser-extension"),
+    "D:\\Zrrssglxt\\MatrixFlow\\resources\\automa-electron",
+  ];
+  const extDir = extCandidates.find((p) => existsSync(join(p, "manifest.json")));
+  let extId = "eijjdlencjmcoobbfakolpfgckgidocd";
+  if (extDir) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(extDir, "manifest.json"), "utf8"));
+      if (manifest.key) extId = extensionIdFromKey(manifest.key);
+    } catch {}
+  }
+  let token = "";
+  try {
+    token = resolveToken();
+  } catch {}
+  const params = new URLSearchParams({ locale: "zh-CN", mfOpenMode: "dashboard" });
+  if (token) {
+    params.set("mfToken", token);
+    params.set("mfApiBase", baseUrl());
+  }
+  const fullUrl = `chrome-extension://${extId}/newtab.html?${params.toString()}#/workflows`;
+  // 2026-08-11 实测：只有独立工作台（--app + automa-workbench profile）能正常显示
+  // 「Dashboard - Automa」且无地址栏；业务窗口新开窗口会渲染空白/被屏蔽。
+  await launchAutomaWorkbench(fullUrl, "automa-window");
 }
 
 async function cmdPages(profile) {

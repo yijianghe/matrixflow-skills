@@ -314,6 +314,11 @@ node scripts/mf-browser.mjs automa-window
 > 修正（2026-08-11 实测）：不要在业务窗口里 `Target.createTarget(newWindow)` 打开 Automa 面板——
 > 那个窗口会渲染空白/显示「已被屏蔽」。现在一律走独立工作台（`--app` + automa-workbench），
 > 实测标题为「Dashboard - Automa」，可正常浏览/运行工作流。
+> **窗口形态（2026-08-11 确认）**：独立窗口 + Automa 图标（任务栏用 `automa-icon.ico` +
+> AUMID `com.matrixflow.automa` 注册），**无地址栏、无浏览器标签页**（顶部是 Automa 应用
+> 自己的工作流页签）。`automa-open <workflowId>` 与 `automa-window` 都走这个干净窗口；
+> 设计器 URL（`mfOpenMode=designer`）会被 Chromium 拦截（ERR_BLOCKED_BY_CLIENT），
+> 所以打开工作流=打开工作台列表页，用户在窗口内点击目标工作流进入设计器。
 
 **多窗口编排（每个窗口发一行，发完关窗口开下一个）**：
 1. 先读表格 CSV（表格是公开可读的）：`https://docs.google.com/spreadsheets/d/1akNZK1qV-We18E4m2rqMuybBUYgctUuBbSjn3DNqQsQ/export?format=csv&gid=0`；
