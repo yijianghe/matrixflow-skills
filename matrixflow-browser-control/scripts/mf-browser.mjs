@@ -911,30 +911,12 @@ public static class AutomaLnk {
   }
   const fullUrl = `chrome-extension://${extId}/newtab.html?${params.toString()}#/workflows`;
 
-  // 优先：在运行中的业务窗口浏览器里新开一个【独立窗口】打开 Automa（工作流都在，又是独立窗口）
-  if (profileSpec) {
-    try {
-      const { profile, selector } = parseProfileSpec(profileSpec);
-      let profileDir = findProfileDir(profile);
-      if (!profileDir) {
-        const id = await resolveProfileId(profile);
-        profileDir = findProfileDir(id);
-      }
-      if (profileDir) {
-        const port = readPort(profileDir);
-        const ver = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-        const bws = makeCdp(ver.webSocketDebuggerUrl);
-        await bws.send("Target.createTarget", { url: fullUrl, newWindow: true });
-        bws.close();
-        console.log(JSON.stringify({ ok: true, mode: "automa-new-window", profile: profileSpec, url: fullUrl }, null, 2));
-        return;
-      }
-    } catch (err) {
-      console.warn("[automa-window] 在业务窗口新开窗口失败，回退独立工作台：", err instanceof Error ? err.message : err);
-    }
-  }
+  // 2026-08-11 实测：在业务窗口里 Target.createTarget(newWindow) 打开的面板渲染空白/被屏蔽，
+  // 只有独立工作台（--app + automa-workbench profile）能正常显示「Dashboard - Automa」。
+  // 因此一律走独立工作台模式（类似比特浏览器），不再在业务窗口新开窗口。
+  void profileSpec;
 
-  // 回退/无窗口时：独立工作台（--app，Automa 图标）
+  // 独立工作台（--app，Automa 图标）
   const args = [
     `--user-data-dir=${workbench}`,
     `--load-extension=${extDir}`,

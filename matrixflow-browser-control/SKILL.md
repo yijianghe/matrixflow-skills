@@ -311,6 +311,9 @@ node scripts/mf-browser.mjs automa-window
 ```
 会在独立窗口（非标签页）打开 Automa 工作流页面，使用独立轻量 profile 和 Automa 图标，
 不占用业务窗口、不影响业务窗口的登录状态。配合 `workflow-import` 导入工作流后即可编辑运行。
+> 修正（2026-08-11 实测）：不要在业务窗口里 `Target.createTarget(newWindow)` 打开 Automa 面板——
+> 那个窗口会渲染空白/显示「已被屏蔽」。现在一律走独立工作台（`--app` + automa-workbench），
+> 实测标题为「Dashboard - Automa」，可正常浏览/运行工作流。
 
 **多窗口编排（每个窗口发一行，发完关窗口开下一个）**：
 1. 先读表格 CSV（表格是公开可读的）：`https://docs.google.com/spreadsheets/d/1akNZK1qV-We18E4m2rqMuybBUYgctUuBbSjn3DNqQsQ/export?format=csv&gid=0`；
