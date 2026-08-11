@@ -923,6 +923,11 @@ public static class AutomaLnk {
     `--user-data-dir=${workbench}`,
     `--load-extension=${extDir}`,
     `--app=${fullUrl}`,
+    // 开启 CDP 调试端口，供 Agent 像真人一样用真实鼠标/键盘驱动 Automa 设计器（拖拽写工作流）
+    "--remote-debugging-port=9224",
+    // 非商店的解包扩展必须加这个，否则 Chrome 会间歇性把它标记为不安全并显示「已被屏蔽」
+    "--enable-unsafe-extension-debugging",
+    "--enable-extensions",
     // 隐藏 Chrome for Testing 的“仅适用于自动测试”横幅
     "--disable-infobars",
     "--app-user-model-id=com.matrixflow.automa",
