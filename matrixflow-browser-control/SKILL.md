@@ -301,6 +301,13 @@ node scripts/xhs-marketing.mjs <profileSpec> reference <关键词...> --top 5
   → 工作流 → 导入 → 用 `upload` 命令把 `fb-auto-posting.automa.json` 注入文件选择框完成导入；
 - 更新内容：`node scripts/mf-browser.mjs workflow-import resources/automa-workflows/fb-auto-posting.automa.json fb_auto "Facebook自动化"`。
 
+**Automa 独立工作台窗口（2026-08-11 新增，类似比特浏览器）**：
+```bash
+node scripts/mf-browser.mjs automa-window
+```
+会在独立窗口（非标签页）打开 Automa 工作流页面，使用独立轻量 profile 和 Automa 图标，
+不占用业务窗口、不影响业务窗口的登录状态。配合 `workflow-import` 导入工作流后即可编辑运行。
+
 **多窗口编排（每个窗口发一行，发完关窗口开下一个）**：
 1. 先读表格 CSV（表格是公开可读的）：`https://docs.google.com/spreadsheets/d/1akNZK1qV-We18E4m2rqMuybBUYgctUuBbSjn3DNqQsQ/export?format=csv&gid=0`；
 2. 从第 2 行开始，每行对应一个窗口：`open <窗口>` → 确认已登录 Facebook（未登录先登录）→

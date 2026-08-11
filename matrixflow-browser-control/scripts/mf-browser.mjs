@@ -44,18 +44,18 @@
  *   MF_USER_DATA         userData root override
  */
 
-import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-11.2";
+const SKILL_VERSION = "2026-08-11.3";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
@@ -773,6 +773,148 @@ async function cmdWorkflowList() {
   console.log(JSON.stringify(list, null, 2));
 }
 
+// 计算 Chrome 解包扩展 ID：manifest key（base64 SPKI）→ SHA256 前16字节 → a-p 映射
+function extensionIdFromKey(base64Key) {
+  const der = Buffer.from(base64Key, "base64");
+  const hex = require("node:crypto").createHash("sha256").update(der).digest("hex").slice(0, 32);
+  const chars = "abcdefghijklmnop";
+  return [...hex].map((c) => chars[parseInt(c, 16)]).join("");
+}
+
+/**
+ * 单独启动一个 Automa 工作台窗口（独立窗口 + Automa 图标，类似比特浏览器）。
+ * 不占用业务窗口：用独立的轻量 profile 目录，--app 模式打开 Automa 扩展页。
+ */
+async function cmdAutomaWindow() {
+  const userDataRoot = resolveUserDataRoot();
+  const exeCandidates = [
+    process.env.MF_BROWSER_EXE,
+    "D:\\Zrrssglxt\\MatrixFlow\\resources\\playwright-browsers\\chromium-1223\\chrome-win64\\MatrixFlowBrowser.exe",
+    join(process.env.LOCALAPPDATA || "", "Programs", "MatrixFlow", "resources", "playwright-browsers", "chromium-1223", "chrome-win64", "MatrixFlowBrowser.exe"),
+    join(process.env.LOCALAPPDATA || "", "Programs", "@matrixflow", "resources", "playwright-browsers", "chromium-1223", "chrome-win64", "MatrixFlowBrowser.exe"),
+  ].filter(Boolean);
+  const exe = exeCandidates.find((p) => existsSync(p));
+  if (!exe) throw new Error("未找到 MatrixFlowBrowser.exe（请先安装/启动 MatrixFlow）");
+
+  const extCandidates = [
+    join(userDataRoot, "automa-browser-extension"),
+    "D:\\Zrrssglxt\\MatrixFlow\\resources\\automa-electron",
+  ];
+  const extDir = extCandidates.find((p) => existsSync(join(p, "manifest.json")));
+  if (!extDir) throw new Error("未找到 Automa 扩展目录");
+
+  let extId = "";
+  try {
+    const manifest = JSON.parse(readFileSync(join(extDir, "manifest.json"), "utf8"));
+    if (manifest.key) extId = extensionIdFromKey(manifest.key);
+  } catch {}
+  if (!extId) extId = "eijjdlencjmcoobbfakolpfgckgidocd";
+
+  const workbench = join(userDataRoot, "automa-workbench");
+  mkdirSync(join(workbench, "Default"), { recursive: true });
+  const prefsPath = join(workbench, "Default", "Preferences");
+  if (!existsSync(prefsPath)) {
+    writeFileSync(prefsPath, JSON.stringify({ profile: { exit_type: "Normal" } }), "utf8");
+  }
+
+  // 确保 Automa 独立窗口的身份图标（Automa 图标 + 独立 AUMID，任务栏不跟业务窗口混）
+  try {
+    const icoPath = join(userDataRoot, "browser-shortcuts", "automa-icon.ico");
+    const lnkDir = join(process.env.APPDATA || "", "Microsoft", "Windows", "Start Menu", "Programs", "MatrixFlow");
+    const lnkPath = join(lnkDir, "Automa\u5de5\u4f5c\u53f0.lnk");
+    const iconSrc = join(extDir, "icon-128.png");
+    if (!existsSync(icoPath) || !existsSync(lnkPath)) {
+      mkdirSync(lnkDir, { recursive: true });
+      const ps = `
+Add-Type -AssemblyName System.Drawing
+$ico = '${icoPath}'
+if (-not (Test-Path -LiteralPath $ico)) {
+  $img = [System.Drawing.Image]::FromFile('${iconSrc}')
+  $bmp = New-Object System.Drawing.Bitmap 32, 32
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $g.DrawImage($img, 0, 0, 32, 32)
+  $g.Dispose(); $img.Dispose()
+  $ms = New-Object System.IO.MemoryStream
+  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+  $png = $ms.ToArray(); $ms.Dispose()
+  $fs = [System.IO.File]::Create($ico)
+  $bw = New-Object System.IO.BinaryWriter($fs)
+  $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]1)
+  $bw.Write([Byte]32); $bw.Write([Byte]32); $bw.Write([Byte]0); $bw.Write([Byte]0)
+  $bw.Write([UInt16]1); $bw.Write([UInt16]32)
+  $bw.Write([UInt32]$png.Length); $bw.Write([UInt32]22)
+  $bw.Write($png)
+  $bw.Close(); $fs.Close(); $bmp.Dispose()
+}
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class AutomaLnk {
+  [ComImport, Guid("00021401-0000-0000-C000-000000000046")] public class ShellLink {}
+  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+  public interface IShellLinkW {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder p, int c, IntPtr f, int g);
+    void GetIDList(out IntPtr p); void SetIDList(IntPtr p);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder p, int c); void SetDescription(string p);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder p, int c); void SetWorkingDirectory(string p);
+    void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder p, int c); void SetArguments(string p);
+    void GetHotkey(out short p); void SetHotkey(short p);
+    void GetShowCmd(out int p); void SetShowCmd(int p);
+    void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder p, int c, out int i); void SetIconLocation(string p, int i);
+    void SetRelativePath(string p, int r); void Resolve(IntPtr h, int f); void SetPath(string p);
+  }
+  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("0000010B-0000-0000-C000-000000000046")]
+  public interface IPersistFile {
+    void GetClassID(out Guid p); int IsDirty(); void Load(string f, int m);
+    void Save(string f, bool r); void SaveCompleted(string f); void GetCurFile([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder p);
+  }
+  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+  public interface IPropertyStore {
+    void GetCount(out uint c); void GetAt(uint i, out PropertyKey k);
+    void GetValue(ref PropertyKey k, out PropVariant v); void SetValue(ref PropertyKey k, ref PropVariant v); void Commit();
+  }
+  [StructLayout(LayoutKind.Sequential)] public struct PropertyKey { public Guid fmtid; public uint pid; }
+  [StructLayout(LayoutKind.Sequential)] public struct PropVariant { public ushort vt; public ushort a, b, c; public IntPtr p, q; }
+  public static void Register(string lnk, string exe, string icon, string aumid) {
+    var l = (IShellLinkW)new ShellLink();
+    l.SetPath(exe); l.SetIconLocation(icon, 0);
+    ((IPersistFile)l).Save(lnk, true);
+    var st = (IPropertyStore)l;
+    var k = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+    var v = new PropVariant { vt = 31, p = Marshal.StringToCoTaskMemUni(aumid) };
+    st.SetValue(ref k, ref v); st.Commit();
+  }
+}
+"@
+[AutomaLnk]::Register('${lnkPath}', '${exe}', '${icoPath}', 'com.matrixflow.automa')
+`;
+      const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], {
+        windowsHide: true,
+        stdio: "ignore",
+        detached: true,
+      });
+      child.unref();
+    }
+  } catch {}
+
+  const url = `chrome-extension://${extId}/newtab.html#/workflows`;
+  const args = [
+    `--user-data-dir=${workbench}`,
+    `--load-extension=${extDir}`,
+    `--app=${url}`,
+    "--app-user-model-id=com.matrixflow.automa",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-session-crashed-bubble",
+  ];
+  const child = spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: false });
+  child.unref();
+  console.log(JSON.stringify({ ok: true, mode: "automa-window", exe, extId, url, profile: workbench }, null, 2));
+}
+
 async function cmdPages(profile) {
   const { profile: profileId } = parseProfileSpec(profile);
   let profileDir = findProfileDir(profileId);
@@ -1200,6 +1342,7 @@ async function main() {
     case "workflow-create": return await cmdWorkflowCreate(args[0], args[1]);
     case "workflow-import": return await cmdWorkflowImport(args[0], args[1], args[2]);
     case "workflow-list": return await cmdWorkflowList();
+    case "automa-window": return await cmdAutomaWindow();
     case "pages": return await cmdPages(args[0]);
     case "navigate": return await cmdNavigate(args[0], args[1]);
     case "title": return await cmdTitle(args[0]);
