@@ -785,7 +785,7 @@ function extensionIdFromKey(base64Key) {
  * 单独启动一个 Automa 工作台窗口（独立窗口 + Automa 图标，类似比特浏览器）。
  * 不占用业务窗口：用独立的轻量 profile 目录，--app 模式打开 Automa 扩展页。
  */
-async function cmdAutomaWindow() {
+async function cmdAutomaWindow(profileSpec) {
   const userDataRoot = resolveUserDataRoot();
   const exeCandidates = [
     process.env.MF_BROWSER_EXE,
@@ -899,20 +899,63 @@ public static class AutomaLnk {
     }
   } catch {}
 
-  const url = `chrome-extension://${extId}/newtab.html#/workflows`;
+  // 携带本地 API Token 让 Automa 工作台同步 MatrixFlow 的工作流（否则新 profile 里看不到已有工作流）
+  let token = "";
+  try {
+    token = resolveToken();
+  } catch {}
+  const params = new URLSearchParams({ locale: "zh-CN", mfOpenMode: "dashboard" });
+  if (token) {
+    params.set("mfToken", token);
+    params.set("mfApiBase", baseUrl());
+  }
+  const fullUrl = `chrome-extension://${extId}/newtab.html?${params.toString()}#/workflows`;
+
+  // 优先：在运行中的业务窗口浏览器里新开一个【独立窗口】打开 Automa（工作流都在，又是独立窗口）
+  if (profileSpec) {
+    try {
+      const { profile, selector } = parseProfileSpec(profileSpec);
+      let profileDir = findProfileDir(profile);
+      if (!profileDir) {
+        const id = await resolveProfileId(profile);
+        profileDir = findProfileDir(id);
+      }
+      if (profileDir) {
+        const port = readPort(profileDir);
+        const ver = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+        const bws = makeCdp(ver.webSocketDebuggerUrl);
+        await bws.send("Target.createTarget", { url: fullUrl, newWindow: true });
+        bws.close();
+        console.log(JSON.stringify({ ok: true, mode: "automa-new-window", profile: profileSpec, url: fullUrl }, null, 2));
+        return;
+      }
+    } catch (err) {
+      console.warn("[automa-window] 在业务窗口新开窗口失败，回退独立工作台：", err instanceof Error ? err.message : err);
+    }
+  }
+
+  // 回退/无窗口时：独立工作台（--app，Automa 图标）
   const args = [
     `--user-data-dir=${workbench}`,
     `--load-extension=${extDir}`,
-    `--app=${url}`,
+    `--app=${fullUrl}`,
+    // 隐藏 Chrome for Testing 的“仅适用于自动测试”横幅
+    "--disable-infobars",
     "--app-user-model-id=com.matrixflow.automa",
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-blink-features=AutomationControlled",
     "--disable-session-crashed-bubble",
   ];
+  // 只保留一个 Automa 工作台窗口：先关掉旧的
+  try {
+    const killScript = `Get-CimInstance Win32_Process -Filter "Name='MatrixFlowBrowser.exe'" | Where-Object { $_.CommandLine -like '*automa-workbench*' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+    spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", killScript], { windowsHide: true, timeout: 8000 });
+  } catch {}
+  await new Promise((r) => setTimeout(r, 1200));
   const child = spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: false });
   child.unref();
-  console.log(JSON.stringify({ ok: true, mode: "automa-window", exe, extId, url, profile: workbench }, null, 2));
+  console.log(JSON.stringify({ ok: true, mode: "automa-window", exe, extId, url: fullUrl, profile: workbench }, null, 2));
 }
 
 async function cmdPages(profile) {
@@ -1342,7 +1385,7 @@ async function main() {
     case "workflow-create": return await cmdWorkflowCreate(args[0], args[1]);
     case "workflow-import": return await cmdWorkflowImport(args[0], args[1], args[2]);
     case "workflow-list": return await cmdWorkflowList();
-    case "automa-window": return await cmdAutomaWindow();
+    case "automa-window": return await cmdAutomaWindow(args[0]);
     case "pages": return await cmdPages(args[0]);
     case "navigate": return await cmdNavigate(args[0], args[1]);
     case "title": return await cmdTitle(args[0]);
