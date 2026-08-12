@@ -493,6 +493,15 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   **注意：安装时请更新用户实际启动的目录**（本机存在
   `D:\Codex-Windows-x64\MatrixFlow` 与 `D:\Zrrssglxt\MatrixFlow` 两份安装，
   需同时覆盖，否则用户仍会启动到旧版本）。
+- **手机尺寸窗口右侧白屏修复（2026-08-12 实测）**：400 宽视口放在 500 宽窗口里
+  原来右侧留白 100px（纯白）。修复：
+  - 缩放比例按“真实窗口内容宽度 / 配置宽度”计算并固定（400 配置 ≈ 1.25 倍），
+    页面放大填满整个窗口，不再有白色留白；
+  - 该比例在页面导航后重套用时保持不变（之前导航后会被误算回 1，白屏复发）；
+  - 初始页面仿真改为“先完成再显示窗口”（限时 1.5s），不再出现
+    “先看到整页 → 突然缩成手机尺寸”的闪烁。
+  实测：11103（400×700）窗口页面铺满 516 宽，右侧为页面自身深色背景；
+  欢迎页在 400 宽下是居中卡片设计（深色背景），真实手机网站会自然铺满宽度。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
