@@ -427,6 +427,25 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   登录成功即可发帖；密码错误/设备验证/广告同意墙等异常窗口直接关闭；
   发布完成的窗口也关闭，保持环境干净。
 
+## MatrixFlow 客户端 v1.13 修复记录（2026-08-12）
+
+- **窗口尺寸生效（不再强制全屏）**：根因是启动代码写死 `--start-maximized` 且窗口尺寸硬编码
+  `1280x800`。已改为读取指纹配置的屏幕宽高（fingerprint.screen），去掉强制最大化；
+  实测：配置 1280x720 的窗口精确按该尺寸打开（窗口宽 1280、内容区 720）。
+  注意：如果配置尺寸大于物理屏幕（如 1680x1050 > 1366x768），会被系统钳制到屏幕大小，
+  看起来像全屏——这是正常行为；
+- **窗口尺寸快捷选择（对齐比特浏览器）**：创建窗口 → 高级设置 → 屏幕宽度/高度下方新增
+  8 个常用分辨率按钮（800x600/1024x768/1280x800/1360x768/1440x900/1600x900/1920x1080/2560x1440），
+  点击自动填入宽高；
+- **语言选择支持搜索（对齐比特浏览器）**：浏览器语言输入框加 datalist 搜索建议，
+  输入语言代码或中文名即出现匹配列表（17 种常用语言带中文名），选中即填入；
+- **仪表盘指标卡数值居中**：`mf-metric-value` 原本无 CSS 定义导致靠左，已加
+  `.mf-metric-value { text-align: center }`（总环境数/运行中/异常/套餐用量全部居中）。
+
+涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
+`packages/browser-core/src/utils/window-alignment.ts`、
+`apps/desktop/src/renderer/assets/index-mTN2Aiv6.js`。安装包：`MatrixFlow Setup 1.13.0.exe`。
+
 **配套工具**：
 - `fb-set-public.mjs <profileId>`：把当前发布框/帖子可见范围改成「公开」；
 - `fb-type-prose.mjs <profileId> <textFile>`：逐行输入（换行=Enter）；
