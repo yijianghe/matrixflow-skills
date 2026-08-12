@@ -427,7 +427,16 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   登录成功即可发帖；密码错误/设备验证/广告同意墙等异常窗口直接关闭；
   发布完成的窗口也关闭，保持环境干净。
 
-## MatrixFlow 客户端 v1.13 修复记录（2026-08-12）
+## MatrixFlow 客户端 v1.14 修复记录（2026-08-12）
+
+- **v1.14.0（2026-08-12 发布）**：版本号从 1.13.0 升到 1.14.0（桌面安装包、
+  UI 底部版本、preload 全部同步）；包含此前 v1.13 全部修复：主进程 Error 弹窗、
+  手机尺寸视口仿真+苹果手机UA、右侧白屏兜底（CDP 默认背景固定深色）、
+  Cookie 多格式导入与合并式持久化、手机尺寸预设、77 国语言、窗口居中与尺寸生效。
+  安装包：`MatrixFlow Setup 1.14.0.exe`，需同时覆盖
+  `D:\Codex-Windows-x64\MatrixFlow` 与 `D:\Zrrssglxt\MatrixFlow` 两份安装。
+
+### v1.13 修复记录（2026-08-12）
 
 - **窗口尺寸生效（不再强制全屏）**：根因是启动代码写死 `--start-maximized` 且窗口尺寸硬编码
   `1280x800`。已改为读取指纹配置的屏幕宽高（fingerprint.screen），去掉强制最大化；
