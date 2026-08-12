@@ -519,6 +519,9 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   已把 UI 常量与 preload 兜底版本同步为 "1.13.0"，桌面客户端底部将显示
   v1.13.0。注意：若在浏览器里直接访问 browser.lingjingxia.com（云端网页版），
   那是服务器上的独立部署，需把新构建上传到服务器才会同步。
+- **设置页“关于 MatrixFlow”品牌卡片未居中修复**：卡片用了 `max-w-md` 但没有
+  `mx-auto`，在设置页纵向布局里被顶到左侧。已加 `mx-auto w-full`，卡片与内部
+  文字（Logo、MatrixFlow、标语、Version）现在水平居中。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
