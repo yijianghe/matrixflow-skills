@@ -869,7 +869,7 @@ async function main() {
             .filter(x => {
               const t = (x.textContent || '').trim();
               const a = (x.getAttribute('aria-label') || '').trim();
-              return (t === '发帖' || t === 'Post' || a === '发帖' || a === 'Post') && vis2(x) && x.getAttribute('aria-disabled') !== 'true';
+              return (/^(发帖|Post|게시|Pubblica|Publicar|Veröffentlichen|Publier|发布)$/.test(t) || /^(发帖|Post|게시|Pubblica|Publicar|Veröffentlichen|Publier|发布)$/.test(a)) && vis2(x) && x.getAttribute('aria-disabled') !== 'true';
             })
             .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
           if (!b) return null;
