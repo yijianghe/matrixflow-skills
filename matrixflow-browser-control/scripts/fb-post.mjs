@@ -125,14 +125,14 @@ async function dismissOverlays(cdp) {
         const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
           const r = x.getBoundingClientRect();
           const t = (x.innerText || '');
-          return r.width > 100 && r.bottom > 0 && (t.includes('创建 PIN 码') || t.includes('加密') || /稍后|以后再说|现在不|暂不|跳过/.test(t.slice(0, 200)));
+          return r.width > 100 && r.bottom > 0 && (t.includes('创建 PIN 码') || t.includes('加密') || t.includes('检查分享对象') || t.includes('更新设置') || /稍后|以后再说|现在不|暂不|跳过/.test(t.slice(0, 200)));
         });
         if (!d) return null;
         const closeBtn = [...d.querySelectorAll('div[role=button]')].find(b => {
           const a = (b.getAttribute('aria-label') || '');
           const t = (b.textContent || '');
           const r = b.getBoundingClientRect();
-          return (a.includes('关闭') || /稍后|以后再说|现在不|暂不|跳过/.test(t)) && r.width > 20 && r.bottom > 0 && r.top < innerHeight;
+          return (a.includes('关闭') || /稍后|以后再说|现在不|暂不|跳过|继续|保存|完成/.test(t)) && r.width > 20 && r.bottom > 0 && r.top < innerHeight;
         });
         if (!closeBtn) return null;
         const r = closeBtn.getBoundingClientRect();
@@ -152,7 +152,8 @@ async function visibleDialogSelector(cdp, probeText) {
     cdp,
     `(() => {
       const dialogs = [...document.querySelectorAll('[role=dialog]')]
-        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
+        .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0
+          && !(d.innerText || '').includes('检查分享对象') && !(d.innerText || '').includes('更新设置'));
       const ranked = dialogs.filter(d => (d.innerText || '').includes(${JSON.stringify(probeText || "")}))
         .concat(dialogs);
       for (const d of ranked) {
@@ -244,8 +245,11 @@ async function typeTextInPhotoEditor(cdp, text) {
     cdp,
     `(() => {
       const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+        const t = (x.innerText || '');
+        if (t.includes('检查分享对象') || t.includes('更新设置') || /Reels 现在/.test(t)) return false;
         const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
-        return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+        const ce = [...x.querySelectorAll('div[contenteditable=true]')].filter(e => e.getBoundingClientRect().width > 40).length;
+        return big >= 1 && ce >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
       });
       if (!d) return null;
       const ce = [...d.querySelectorAll('div[contenteditable=true]')]
@@ -283,8 +287,11 @@ async function photoDialogState(cdp, probe) {
     cdp,
     `(() => {
       const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+        const t = (x.innerText || '');
+        if (t.includes('检查分享对象') || t.includes('更新设置') || /Reels 现在/.test(t)) return false;
         const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
-        return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+        const ce = [...x.querySelectorAll('div[contenteditable=true]')].filter(e => e.getBoundingClientRect().width > 40).length;
+        return big >= 1 && ce >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
       });
       if (!d) return null;
       const imgs = [...d.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
@@ -450,7 +457,7 @@ async function setComposerPublic(cdp, probe) {
       `(() => {
         const dialogs = [...document.querySelectorAll('[role=dialog]')]
           .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-        const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
+        const d = dialogs.find(x => !(x.innerText || '').includes('检查分享对象') && !(x.innerText || '').includes('更新设置') && [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
           || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}))
           || dialogs[0];
         if (!d) return null;
@@ -523,7 +530,7 @@ async function setComposerPublic(cdp, probe) {
       `(() => {
         const dialogs = [...document.querySelectorAll('[role=dialog]')]
           .filter(d => d.getBoundingClientRect().width > 300 && d.getBoundingClientRect().bottom > 0);
-        const d = dialogs.find(x => [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
+        const d = dialogs.find(x => !(x.innerText || '').includes('检查分享对象') && !(x.innerText || '').includes('更新设置') && [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length >= 1)
           || dialogs.find(x => (x.innerText || '').includes(${JSON.stringify(probe)}));
         if (!d) return '';
         const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
@@ -581,36 +588,27 @@ function autoPickImages(count = 1) {
   ].filter(Boolean);
   const exts = /\.(png|jpe?g|webp|gif)$/i;
   const candidates = [];
-  for (const folder of folders) {
-    if (!existsSync(folder)) continue;
+  const collect = (folder, depth, includeUsed = false) => {
+    if (!existsSync(folder) || depth > 3) return;
     let entries;
     try {
       entries = readdirSync(folder, { withFileTypes: true });
     } catch {
-      continue;
+      return;
     }
     for (const e of entries) {
-      if (!e.isFile()) continue;
       const full = join(folder, e.name);
-      if (!exts.test(e.name)) continue;
-      if (usedSet.has(String(full).toLowerCase())) continue;
-      candidates.push(full);
+      if (e.isDirectory()) {
+        collect(full, depth + 1);
+      } else if (e.isFile() && exts.test(e.name)) {
+        if (includeUsed || !usedSet.has(String(full).toLowerCase())) candidates.push(full);
+      }
     }
-  }
+  };
+  for (const folder of folders) collect(folder, 0);
   if (!candidates.length) {
     console.warn("[fb] 素材文件夹里没有未用过的图片，回退到全部图片（含已用）");
-    for (const folder of folders) {
-      if (!existsSync(folder)) continue;
-      let entries;
-      try {
-        entries = readdirSync(folder, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const e of entries) {
-        if (e.isFile() && exts.test(e.name)) candidates.push(join(folder, e.name));
-      }
-    }
+    for (const folder of folders) collect(folder, 0, true);
   }
   // 随机洗牌取 count 张
   for (let i = candidates.length - 1; i > 0; i--) {
@@ -750,6 +748,8 @@ async function main() {
     await sleep(1200);
 
     // 2) 锁定顶层可见发布框
+    // 2026-08-12：部分账号打开发布框时会弹 Reels「检查分享对象/更新设置」引导，先清掉再锁定
+    await dismissOverlays(cdp);
     const vis = await visibleDialogSelector(cdp, "");
     if (!vis) throw new Error("找不到可见发布框");
     console.log("[fb] 已锁定顶层发布框");
@@ -813,6 +813,7 @@ async function main() {
     // 4) 后写文案（写入「带图弹窗」的文字框）
     let typedOk = false;
     for (let attempt = 0; attempt < 3 && !typedOk; attempt++) {
+      await dismissOverlays(cdp);
       await typeTextInPhotoEditor(cdp, text);
       const st = await photoDialogState(cdp, probe);
       typedOk = st.hasText;
