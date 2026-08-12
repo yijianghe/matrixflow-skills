@@ -502,6 +502,18 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
     “先看到整页 → 突然缩成手机尺寸”的闪烁。
   实测：11103（400×700）窗口页面铺满 516 宽，右侧为页面自身深色背景；
   欢迎页在 400 宽下是居中卡片设计（深色背景），真实手机网站会自然铺满宽度。
+- **手机尺寸窗口自动切换苹果手机指纹（2026-08-12 实测）**：真实网站右侧白屏的
+  根因是手机窗口仍用桌面 UA，站点返回桌面版页面，窄视口下右侧大片空白。
+  现宽度 <600 的窗口启动时自动把 UA 换成 iPhone Safari 移动版、platform 同步
+  改为 iPhone（对齐比特「手机版 → 生成苹果手机UA」），站点按移动版渲染铺满。
+  实测：11103 打开小红书 → 移动版（标题“小红书 - 你的生活指南”），
+  documentElement.clientWidth=scrollWidth=400 无溢出，窗口 516 宽页面铺满、
+  右侧无白条。
+- **窗口尺寸新增 6 个手机预设**：360x640 / 375x667 / 390x844 / 412x915 /
+  414x896 / 430x932（创建/编辑窗口 → 高级设置 → 窗口尺寸面板第一排）。
+- **语言下拉扩到 77 个国家/地区**：浏览器语言输入框的 datalist 从 17 项扩到
+  77 项（含各国本地语言名称），支持搜索，如 English (US)、日本語、한국어、
+  हिन्दी、العربية、Português (Brasil) 等。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
