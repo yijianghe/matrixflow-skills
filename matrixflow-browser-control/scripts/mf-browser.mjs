@@ -791,6 +791,22 @@ async function cmdWorkflowList() {
   console.log(JSON.stringify(list, null, 2));
 }
 
+// 更新窗口备注（写进 MatrixFlow 应用「浏览器环境」列表的备注列，云端同步）
+async function cmdNote(profileSpec, noteText) {
+  if (!profileSpec || !noteText) throw new Error("用法: note <profileId|名称> <备注内容>");
+  const id = await resolveProfileId(profileSpec, { allowOffline: true });
+  const cloudToken = await resolveCloudToken();
+  if (!cloudToken) throw new Error("未找到云端登录令牌，请先在 MatrixFlow 客户端登录");
+  const res = await fetch(`${CLOUD_API_BASE}/profiles/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { Authorization: "Bearer " + cloudToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ notes: noteText }),
+  });
+  const j = await res.json();
+  if (!j.success) throw new Error("云端更新备注失败: " + (j.error?.message || res.status));
+  console.log(JSON.stringify({ ok: true, profile: profileSpec, notes: noteText }, null, 2));
+}
+
 // 计算 Chrome 解包扩展 ID：manifest key（base64 SPKI）→ SHA256 前16字节 → a-p 映射
 function extensionIdFromKey(base64Key) {
   const der = Buffer.from(base64Key, "base64");
@@ -1400,6 +1416,7 @@ async function main() {
     case "create": return await cmdCreate(args);
     case "delete": return await cmdDelete(args[0]);
     case "close": return await cmdClose(args[0]);
+    case "note": return await cmdNote(args[0], args.slice(1).join(" "));
     case "automa-open": return await cmdAutomaOpen(args);
     case "workflow-create": return await cmdWorkflowCreate(args[0], args[1]);
     case "workflow-import": return await cmdWorkflowImport(args[0], args[1], args[2]);
