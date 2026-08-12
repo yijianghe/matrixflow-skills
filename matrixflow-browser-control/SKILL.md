@@ -463,10 +463,33 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   - 新建标签页、页面导航后都会自动重新套用，不会中途变回真实屏幕；
   - 桌面尺寸（宽度 ≥600，如 1280x720）行为不变。
   注意：宽度 400 的视口会按比例放大填充 500 宽的窗口，属于正常表现。
+- **主程序不再“未响应”、打开速度明显提升（2026-08-12 实测）**：根因是任务栏角标
+  模块用同步 PowerShell（spawnSync，最长 45 秒）每 800ms 刷一次，加上快捷方式创建也是
+  同步调用，启动“浏览器内核”阶段会卡死主进程，窗口标题因此显示“未响应”。
+  已全部改为异步 spawn（后台执行、不阻塞），实测 100ms 轮询全程 0 次未响应，
+  窗口首帧约 2 秒内出现。
+- **改尺寸后必定生效**：Chromium 会记住上次窗口位置/尺寸（window_placement），
+  导致“改了尺寸重开还是旧大小”。现每次启动前清掉该记录，窗口始终按指纹配置的
+  分辨率/尺寸居中打开。
+- **Cookie 导入支持多格式（2026-08-12）**：原来只支持 JSON，现在支持：
+  - JSON（数组或 `{ "cookies": [...] }`）；
+  - Netscape cookies.txt 文本（浏览器扩展常用导出格式，直接粘贴或选文件）；
+  - Chromium SQLite（Chrome/Edge 的 Cookies.db，表单“选择文件导入…”按钮），
+    自动用本机 Chrome/Edge Local State 的 DPAPI 密钥解密 v10/v11 加密 cookie；
+  - 导入入口：创建/编辑窗口 → 高级设置 → Cookie 导入 → “选择文件导入…”。
+- **登录态持久化策略优化（防掉线）**：
+  - 启动补种 cookies.json 与云端快照时改为“合并式写入”：本地已存在的
+    domain+path+name 一律不覆盖（原生 Chromium 库是最新状态），杜绝旧快照把
+    新登录态顶掉；
+  - 已过期（超过 1 天容差）的 cookie 自动跳过；
+  - 会话 cookie（expires=-1）正常保留，快照每 ~10 秒轮询落盘，关闭时再全量刷一次。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
-`packages/browser-core/src/types.ts`、
+`packages/browser-core/src/types.ts`、`packages/browser-core/src/utils/cookie-import.ts`、
+`packages/browser-core/src/utils/matrixflow-cdp-state.ts`、`packages/browser-core/src/utils/chromium-branding.ts`、
+`apps/desktop/src/main/index.js`、`apps/desktop/src/main/utils/taskbar-overlay.js`、
+`apps/desktop/src/main/chunks/windows-chromium-shortcut-B8aWKtEA.js`、`apps/desktop/src/preload/index.mjs`、
 `apps/desktop/src/renderer/assets/index-mTN2Aiv6.js`。安装包：`MatrixFlow Setup 1.13.0.exe`。
 
 **配套工具**：
