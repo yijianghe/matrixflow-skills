@@ -207,7 +207,7 @@ async function attachViaChooser(cdp, files) {
   await clickAt(cdp, b.x, b.y);
   const event = await Promise.race([
     chooser,
-    new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+    new Promise((resolve) => setTimeout(() => resolve(null), 2500)),
   ]);
   if (!event || !event.backendNodeId) {
     // 拦截没生效：很可能弹出了原生 Windows「打开」对话框挡住了浏览器
@@ -580,11 +580,12 @@ function autoPickImages(count = 1) {
   const usedSet = new Set(used.map((p) => String(p).toLowerCase()));
   const home = homedir();
   const folders = [
+    // 2026-08-12：专属浏览器素材目录优先（配图必须是浏览器相关截图）
+    join(userData, "fb-images"),
     process.env.FB_IMAGES_DIR,
     join(home, "Documents", "ShareX", "Screenshots"),
     join(home, "Downloads"),
     join(home, "Pictures"),
-    join(userData, "fb-images"),
   ].filter(Boolean);
   const exts = /\.(png|jpe?g|webp|gif)$/i;
   const candidates = [];
@@ -700,13 +701,20 @@ async function main() {
     // 如果标签页停在搜索页/帖子页就会一直找不到发布框。
     if (!/facebook\.com\/\??$/.test(url || "")) {
       await cdp.send("Page.navigate", { url: "https://www.facebook.com/" });
-      await sleep(4500);
+      // 提速：轮询 readyState，不再固定等 4.5s
+      for (let i = 0; i < 25; i++) {
+        try {
+          if ((await ev(cdp, "document.readyState")) === "complete") break;
+        } catch {}
+        await sleep(200);
+      }
+      await sleep(800);
     }
 
     // 1) 打开发布框（先关掉可能遮挡的弹窗，如「创建 PIN 码」提示）
     await dismissOverlays(cdp);
     let composerOpen = false;
-    for (let i = 0; i < 20 && !composerOpen; i++) {
+    for (let i = 0; i < 12 && !composerOpen; i++) {
       composerOpen = (await ev(cdp, `[...document.querySelectorAll('div[contenteditable=true]')].some(e => e.getBoundingClientRect().width > 100 && e.getBoundingClientRect().bottom > 0)`)) === true;
       if (composerOpen) break;
       const trig = await ev(
@@ -742,7 +750,7 @@ async function main() {
           return true;
         })()`);
       }
-      await sleep(800);
+      await sleep(350);
     }
     if (!composerOpen) throw new Error("发布框没有打开");
     await sleep(1200);
@@ -756,18 +764,27 @@ async function main() {
 
     // 3) 先传图（注入到可见层）
     if (files.length) {
-      const viaChooser = await attachViaChooser(cdp, files);
-      if (!viaChooser) {
+      // 2026-08-12 提速+防弹窗：优先直接注入文件（DOM.setFileInputFiles 不触发系统对话框），
+      // 只有找不到输入框时才走「点照片按钮」路径（那条会弹 Windows 选图窗口）。
+      let injected = false;
+      try {
         await setFilesInVisible(cdp, files);
-        console.log(`[fb] 已通过输入框注入 ${files.length} 个附件`);
-      } else {
+        injected = true;
+      } catch {
+        injected = false;
+      }
+      if (!injected) {
+        const viaChooser = await attachViaChooser(cdp, files);
+        if (!viaChooser) throw new Error("图片上传失败：找不到文件输入框");
         console.log(`[fb] 已通过照片按钮注入 ${files.length} 个附件（顶层弹窗）`);
+      } else {
+        console.log(`[fb] 已通过输入框注入 ${files.length} 个附件（无弹窗）`);
       }
       let n = 0;
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 15; i++) {
         n = await countImagesInVisible(cdp);
         if (n >= files.length) break;
-        await sleep(600);
+        await sleep(400);
       }
       console.log(`[fb] 可见层图片预览: ${n}/${files.length}`);
       // 传图后 Facebook 可能新开「照片编辑器」弹窗：重新锁定带图的那一层
@@ -776,6 +793,8 @@ async function main() {
         `(() => {
           const baseName = ${JSON.stringify(files[0].split(/[\\/]/).pop().toLowerCase())};
           const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+            const t = (x.innerText || '');
+            if (t.includes('检查分享对象') || t.includes('更新设置') || /Reels 现在/.test(t)) return false;
             const imgs = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 300 || (i.alt || '').toLowerCase().includes(baseName)).length;
             return imgs >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
           });
@@ -805,9 +824,9 @@ async function main() {
         if (!rm) break;
         const r = JSON.parse(rm);
         await clickAt(cdp, r.x, r.y);
-        await sleep(1000);
+        await sleep(500);
       }
-      await sleep(500);
+      await sleep(250);
     }
 
     // 4) 后写文案（写入「带图弹窗」的文字框）
@@ -885,7 +904,16 @@ async function main() {
       } else {
         await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
       }
-      await sleep(7000);
+      // 提速：发帖后先等 2.5s，再轮询弹窗是否关闭（最多再等 4s）
+      await sleep(2500);
+      for (let w = 0; w < 8; w++) {
+        const closedNow = (await ev(
+          cdp,
+          `[...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]')).length === 0`
+        )) === true;
+        if (closedNow) break;
+        await sleep(500);
+      }
       // 判定：带图弹窗消失 = 已提交发布（不要再重试，避免误发重复帖）
       const photoGone = (await ev(
         cdp,
@@ -909,7 +937,7 @@ async function main() {
       // 未确认时去个人主页核实（防止误报失败导致重发）
       if (attempt === 0) {
         await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
-        await sleep(5000);
+        await sleep(2500);
         const confirmed = (await ev(
           cdp,
           `[...document.querySelectorAll('[role=article]')].some(a => (a.innerText || '').includes(${JSON.stringify(probe)}))`
