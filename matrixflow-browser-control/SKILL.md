@@ -441,6 +441,9 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   输入语言代码或中文名即出现匹配列表（17 种常用语言带中文名），选中即填入；
 - **仪表盘指标卡数值居中**：`mf-metric-value` 原本无 CSS 定义导致靠左，已加
   `.mf-metric-value { text-align: center }`（总环境数/运行中/异常/套餐用量全部居中）。
+- **小尺寸窗口无法创建修复**：创建/编辑表单校验原来限制屏幕宽度 ≥800、高度 ≥600，
+  输入 500x600 等自定义小尺寸时「创建」按钮无反应。已放宽为宽度 ≥320、高度 ≥240；
+  实测 500x600 窗口成功创建并打开（精确 500x600、屏幕居中）。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、
