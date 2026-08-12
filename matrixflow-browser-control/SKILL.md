@@ -455,6 +455,14 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 - **聚焦/保活按生效尺寸居中**：`BrowserRuntime` 现在保存生效的 windowSize/screenSize，
   再次点击运行中的窗口（focusProfile）或关掉最后一个标签自动重建时，按该窗口原尺寸居中，
   不再退回默认 1280x800。
+- **手机尺寸窗口（对齐比特「分辨率」行为，2026-08-12 实测）**：宽度 <600 的配置
+  （如 500x900 / 400x700）受 Chromium 最小窗口宽度限制无法把 OS 窗口开到 400 宽，
+  现通过 CDP 视口仿真 + 注入脚本把页面渲染成配置分辨率：
+  - 页面 innerWidth/innerHeight、screen.width/height 均等于指纹配置（实测 500x900、400x700）；
+  - OS 窗口保持约 516 宽（Chromium 最小 500 内宽）并屏幕居中，页面按手机长条比例渲染；
+  - 新建标签页、页面导航后都会自动重新套用，不会中途变回真实屏幕；
+  - 桌面尺寸（宽度 ≥600，如 1280x720）行为不变。
+  注意：宽度 400 的视口会按比例放大填充 500 宽的窗口，属于正常表现。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
