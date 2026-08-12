@@ -444,9 +444,21 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 - **小尺寸窗口无法创建修复**：创建/编辑表单校验原来限制屏幕宽度 ≥800、高度 ≥600，
   输入 500x600 等自定义小尺寸时「创建」按钮无反应。已放宽为宽度 ≥320、高度 ≥240；
   实测 500x600 窗口成功创建并打开（精确 500x600、屏幕居中）。
+- **窗口启动直接居中、不再抖动（2026-08-12 实测）**：之前是「离屏启动(-48000) →
+  再挪回屏幕」两段式，打开时会先看到偏左/偏大的中间态。现已改为启动参数直接带居中坐标
+  （`--window-position=x,y --window-size=w,h`），首帧就落在最终位置，彻底消除跳变；
+  同时去掉离屏 park 的重复 CDP 搬移，启动时主程序占用更低。
+- **高度不再被过度压缩**：Electron 传入的是工作区高度（如 1366x728，已扣除任务栏），
+  之前钳制再减 60px 边距会把 720/700 的配置高度砍成 668。已改为只留 4px 保险边距，
+  实测 1280x720 窗口精确以 43,4 / 1280x720 打开并居中；400x700 窗口高度精确 700、水平居中。
+  注意：宽度 <500 时 Chromium 自身有最小窗口宽度（400 会被撑到 500 内容宽），属浏览器内核限制。
+- **聚焦/保活按生效尺寸居中**：`BrowserRuntime` 现在保存生效的 windowSize/screenSize，
+  再次点击运行中的窗口（focusProfile）或关掉最后一个标签自动重建时，按该窗口原尺寸居中，
+  不再退回默认 1280x800。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
-`packages/browser-core/src/utils/window-alignment.ts`、
+`packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
+`packages/browser-core/src/types.ts`、
 `apps/desktop/src/renderer/assets/index-mTN2Aiv6.js`。安装包：`MatrixFlow Setup 1.13.0.exe`。
 
 **配套工具**：
