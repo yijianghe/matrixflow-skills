@@ -514,6 +514,11 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 - **语言下拉扩到 77 个国家/地区**：浏览器语言输入框的 datalist 从 17 项扩到
   77 项（含各国本地语言名称），支持搜索，如 English (US)、日本語、한국어、
   हिन्दी、العربية、Português (Brasil) 等。
+- **底部版本号不更新的原因与修复**：UI 里 `MATRIXFLOW_VERSION` 是写死的常量
+  （一直是 "1.9.0"），重新打包安装包不会自动改它，所以底部一直显示旧版本号。
+  已把 UI 常量与 preload 兜底版本同步为 "1.13.0"，桌面客户端底部将显示
+  v1.13.0。注意：若在浏览器里直接访问 browser.lingjingxia.com（云端网页版），
+  那是服务器上的独立部署，需把新构建上传到服务器才会同步。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
