@@ -483,6 +483,16 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
     新登录态顶掉；
   - 已过期（超过 1 天容差）的 cookie 自动跳过；
   - 会话 cookie（expires=-1）正常保留，快照每 ~10 秒轮询落盘，关闭时再全量刷一次。
+- **修复主进程“Error: options is not defined”弹窗（2026-08-12 实测）**：
+  根因在 `taskbar-overlay.js` 的 `ensureProfileNumberedShortcut`（创建带序号
+  快捷方式的函数）：函数参数是 `(profileId, overlayIndex, browserExePath)`，
+  但子进程退出回调里误写了 `bridgeInFlight.delete(options.profilePath)`，而
+  `options` 在该作用域不存在。PowerShell 创建完快捷方式一退出就抛
+  `ReferenceError`，主进程弹 Error 框、环境显示“异常/浏览器窗口意外关闭”。
+  已删除这两行误用回调，实测打开窗口全程 0 次 Error 弹窗。
+  **注意：安装时请更新用户实际启动的目录**（本机存在
+  `D:\Codex-Windows-x64\MatrixFlow` 与 `D:\Zrrssglxt\MatrixFlow` 两份安装，
+  需同时覆盖，否则用户仍会启动到旧版本）。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
