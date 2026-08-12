@@ -953,9 +953,78 @@ async function main() {
     if (!posted) throw new Error("多次点击发布未生效");
     console.log(`[fb] 发布成功，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
 
-    // 8) 发布后清理：关掉可能残留的系统对话框/空弹窗
+    // 8) 发布后清理：显式点击「创建帖子」弹窗的 × 关闭按钮（2026-08-12）
+    for (let c = 0; c < 3; c++) {
+      // 先 JS 点击所有匹配的关闭按钮，再真实鼠标点一次（双保险）
+      const closeInfo = await ev(
+        cdp,
+        `(() => {
+          const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(x => {
+            const r = x.getBoundingClientRect();
+            return r.width > 300 && r.bottom > 0 && (x.innerText || '').includes('创建帖子');
+          });
+          if (!dialogs.length) return null;
+          let clicked = 0;
+          const centers = [];
+          for (const d of dialogs) {
+            const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
+              const a = (e.getAttribute('aria-label') || '');
+              const r = e.getBoundingClientRect();
+              return a.startsWith('关闭') && r.width > 15 && r.bottom > 0 && r.top < innerHeight;
+            });
+            if (!btn) continue;
+            const r = btn.getBoundingClientRect();
+            btn.click();
+            clicked++;
+            centers.push({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          }
+          return JSON.stringify({ clicked, centers: centers.slice(0, 3) });
+        })()`
+      );
+      if (!closeInfo || JSON.parse(closeInfo).clicked === 0) break;
+      const ci = JSON.parse(closeInfo);
+      for (const p of ci.centers) {
+        await clickAt(cdp, p.x, p.y);
+        await sleep(400);
+      }
+      await sleep(500);
+      // 检查是否还有真正可见的发布框（elementFromPoint 命中）
+      const stillVisible = await ev(
+        cdp,
+        `(() => {
+          const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+            const r = x.getBoundingClientRect();
+            return r.width > 300 && r.bottom > 0 && (x.innerText || '').includes('创建帖子') && x.querySelector('div[contenteditable=true]');
+          });
+          if (!d) return false;
+          const r = d.getBoundingClientRect();
+          const top = document.elementFromPoint(r.x + r.width / 2, r.y + 60);
+          return top ? d.contains(top) : false;
+        })()`
+      );
+      if (stillVisible !== true) break;
+    }
+    // Esc 兜底
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    // 仍有关闭不了的残留弹窗：导航离开强制关闭（不影响已发布的帖子）
+    const visAfter = await ev(
+      cdp,
+      `(() => {
+        const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+          const r = x.getBoundingClientRect();
+          return r.width > 300 && r.bottom > 0 && (x.innerText || '').includes('创建帖子') && x.querySelector('div[contenteditable=true]');
+        });
+        if (!d) return false;
+        const r = d.getBoundingClientRect();
+        const top = document.elementFromPoint(r.x + r.width / 2, r.y + 60);
+        return top ? d.contains(top) : false;
+      })()`
+    );
+    if (visAfter === true) {
+      await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
+      await sleep(2000);
+    }
 
     hist.push({ at: new Date().toISOString(), snippet: text.slice(0, 100) });
     writeFileSync(join(resolveUserDataRoot(), "fb-post-history.json"), JSON.stringify(hist, null, 2), "utf8");
