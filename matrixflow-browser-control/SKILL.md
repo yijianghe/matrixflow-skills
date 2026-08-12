@@ -655,3 +655,37 @@ node scripts/xhs-rednote-publish.mjs <profileId> \
 
 - `upload <id|name[@tab]> <file1> [file2...]`：把本地文件直接注入页面 `input[type="file"]`（绕过 Windows 文件选择框），多文件一次注入；
 - `eval <id|name[@tab]> @<file>`：从 UTF-8 文件读取 JS 执行，避免中文经管道/命令行乱码（推荐含中文的脚本用）。
+
+## Facebook 账号批量管理（2026-08-12 新增，已实测）
+
+### 登录状态检测
+```bash
+node scripts/fb-login-status.mjs <profileId>            # 返回 {"loggedIn":true|false,"state":"feed|login|checkpoint|locked|other",...}
+node scripts/fb-batch-status.mjs <windows.json>         # 批量（3并发），windows.json 格式 [{w:"脸书44",id:"..."}]
+```
+
+### 自动登录 / 退出
+```bash
+node scripts/fb-login.mjs <profileId> "<账号>" "<密码>"  # 自动填表登录，分类 success/wrong/checkpoint/locked
+node scripts/fb-logout.mjs <profileId>                   # 清 facebook cookie 并回登录页（换账号前必做）
+node scripts/fb-batch-login.mjs <accounts.json> --concurrency 3 [--logout]
+# accounts.json 格式: [{"w":"脸书44","id":"<profileId>","a":"账号","p":"密码"}]
+```
+
+### 分组与备注（走云端 API）
+```bash
+node scripts/mf-browser.mjs group-list
+node scripts/mf-browser.mjs group-create "脸书-可用"
+node scripts/mf-browser.mjs group-assign <groupId> <profileId...>
+node scripts/mf-browser.mjs note <profileId|名称> "<备注>"
+node scripts/mf-browser.mjs note-batch <notes.json>      # {"profileId":"备注",...}
+```
+
+### 2026-08-12 实测结论（本次批量盘点）
+- 可用窗口（13 个，已登录可发帖）：脸书4/7/8/9/15/22/25/28/29/30（原有已登录核对有效），
+  脸书44/51/54b（本次用 447446262019 / 6285198612829 / +447407535760 新登录成功）；
+- 异常窗口（57 个）：未登录 / 需2FA设备验证 / 自拍验证 / 卡广告墙 / 已掉线，
+  全部已写入备注并归入「脸书-异常」分组；可用窗口归入「脸书-可用」分组；
+- 注意：本次账号池里绝大多数账号在新设备上触发 2FA/设备验证（two_step_verification /
+  auth_platform / checkpoint），需人工输验证码或手机批准后才能完成登录；
+  登录判定以 `fb-login-status` 的 feed 状态为准（登录脚本会把 2FA 中间页误报为成功）。

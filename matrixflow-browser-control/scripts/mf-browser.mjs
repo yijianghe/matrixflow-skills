@@ -807,6 +807,93 @@ async function cmdNote(profileSpec, noteText) {
   console.log(JSON.stringify({ ok: true, profile: profileSpec, notes: noteText }, null, 2));
 }
 
+async function cmdGroupList() {
+  const cloudToken = await resolveCloudToken();
+  if (!cloudToken) throw new Error("未找到云端登录令牌，请先在 MatrixFlow 客户端登录");
+  const res = await fetch(`${CLOUD_API_BASE}/profile-groups`, {
+    headers: { Authorization: "Bearer " + cloudToken, "Content-Type": "application/json" },
+  });
+  const j = await res.json();
+  if (!j.success) throw new Error("获取分组失败: " + (j.error?.message || res.status));
+  console.log(JSON.stringify({ ok: true, groups: j.data }, null, 2));
+  return j.data;
+}
+
+async function cmdGroupCreate(name) {
+  if (!name) throw new Error("用法: group-create <分组名称>");
+  const cloudToken = await resolveCloudToken();
+  if (!cloudToken) throw new Error("未找到云端登录令牌，请先在 MatrixFlow 客户端登录");
+  const res = await fetch(`${CLOUD_API_BASE}/profile-groups`, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + cloudToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const j = await res.json();
+  if (!j.success) throw new Error("创建分组失败: " + (j.error?.message || res.status));
+  console.log(JSON.stringify({ ok: true, group: j.data }, null, 2));
+  return j.data;
+}
+
+async function cmdGroupAssign(groupSpec, ...profileSpecs) {
+  if (!groupSpec || profileSpecs.length === 0) {
+    throw new Error("用法: group-assign <groupId> <profileId|名称> [profileId...]");
+  }
+  const cloudToken = await resolveCloudToken();
+  if (!cloudToken) throw new Error("未找到云端登录令牌，请先在 MatrixFlow 客户端登录");
+  const groups = await (async () => {
+    const res = await fetch(`${CLOUD_API_BASE}/profile-groups`, {
+      headers: { Authorization: "Bearer " + cloudToken, "Content-Type": "application/json" },
+    });
+    const j = await res.json();
+    return j.success ? j.data : [];
+  })();
+  const group =
+    groups.find((g) => g.id === groupSpec) || groups.find((g) => g.name === groupSpec);
+  if (!group) throw new Error(`分组不存在: ${groupSpec}`);
+  const results = [];
+  for (const spec of profileSpecs) {
+    try {
+      const id = await resolveProfileId(spec, { allowOffline: true });
+      const res = await fetch(`${CLOUD_API_BASE}/profiles/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { Authorization: "Bearer " + cloudToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ groupId: group.id }),
+      });
+      const j = await res.json();
+      results.push({ profile: spec, ok: j.success, error: j.success ? void 0 : (j.error?.message || res.status) });
+    } catch (error) {
+      results.push({ profile: spec, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  console.log(JSON.stringify({ ok: true, group: group.name, groupId: group.id, results }, null, 2));
+  return results;
+}
+
+async function cmdNoteBatch(notesJsonPath) {
+  if (!notesJsonPath) throw new Error("用法: note-batch <notes.json>  (格式: { profileId: 备注 })");
+  const notes = JSON.parse(readFileSync(notesJsonPath, "utf8"));
+  const cloudToken = await resolveCloudToken();
+  if (!cloudToken) throw new Error("未找到云端登录令牌，请先在 MatrixFlow 客户端登录");
+  const entries = Object.entries(notes);
+  const results = [];
+  for (const [profileId, noteText] of entries) {
+    try {
+      const res = await fetch(`${CLOUD_API_BASE}/profiles/${encodeURIComponent(profileId)}`, {
+        method: "PATCH",
+        headers: { Authorization: "Bearer " + cloudToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: String(noteText) }),
+      });
+      const j = await res.json();
+      results.push({ profile: profileId, ok: j.success, error: j.success ? void 0 : (j.error?.message || res.status) });
+    } catch (error) {
+      results.push({ profile: profileId, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  const okCount = results.filter((r) => r.ok).length;
+  console.log(JSON.stringify({ ok: true, updated: okCount, failed: results.length - okCount, results }, null, 2));
+  return results;
+}
+
 // 计算 Chrome 解包扩展 ID：manifest key（base64 SPKI）→ SHA256 前16字节 → a-p 映射
 function extensionIdFromKey(base64Key) {
   const der = Buffer.from(base64Key, "base64");
@@ -1417,6 +1504,10 @@ async function main() {
     case "delete": return await cmdDelete(args[0]);
     case "close": return await cmdClose(args[0]);
     case "note": return await cmdNote(args[0], args.slice(1).join(" "));
+    case "group-list": return await cmdGroupList();
+    case "group-create": return await cmdGroupCreate(args[0]);
+    case "group-assign": return await cmdGroupAssign(args[0], ...args.slice(1));
+    case "note-batch": return await cmdNoteBatch(args[0]);
     case "automa-open": return await cmdAutomaOpen(args);
     case "workflow-create": return await cmdWorkflowCreate(args[0], args[1]);
     case "workflow-import": return await cmdWorkflowImport(args[0], args[1], args[2]);
