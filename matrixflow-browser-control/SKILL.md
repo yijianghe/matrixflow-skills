@@ -522,6 +522,12 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 - **设置页“关于 MatrixFlow”品牌卡片未居中修复**：卡片用了 `max-w-md` 但没有
   `mx-auto`，在设置页纵向布局里被顶到左侧。已加 `mx-auto w-full`，卡片与内部
   文字（Logo、MatrixFlow、标语、Version）现在水平居中。
+- **右侧白屏兜底加固（2026-08-12 再实测）**：360x640 等更窄窗口在个别启动
+  场景下（窗口内容宽度测量超时回退）可能出现缩放比例回退、仿真视口外留白为
+  白色。现启动时额外用 CDP `Emulation.setDefaultBackgroundColorOverride`
+  把页面默认背景固定为深色（#0F172A），任何缩放比例下留白区都不会再是白色。
+  实测 nnnn（360×640）：页面全宽深色渲染、窗口右侧无白色，仅有页面自身
+  深色背景。注意：升级后需**关闭并重新打开**手机窗口才会应用新逻辑。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
 `packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
