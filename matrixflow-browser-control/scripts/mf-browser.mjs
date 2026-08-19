@@ -55,7 +55,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = join(__dirname, "..");
 const DEFAULT_PORT = 19527;
 const CLOUD_API_BASE = "https://browser.lingjingxia.com/api/v1";
-const SKILL_VERSION = "2026-08-11.3";
+const SKILL_VERSION = "2026-08-19.1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 新账号没有任何环境时的默认指纹模板：避免“必须先手动建一个环境”的卡点
@@ -911,15 +911,21 @@ async function launchAutomaWorkbench(fullUrl, mode) {
   const userDataRoot = resolveUserDataRoot();
   const exeCandidates = [
     process.env.MF_BROWSER_EXE,
+    "D:\\Codex-Windows-x64\\MatrixFlow\\resources\\playwright-browsers\\chromium-146-cloak\\chrome-win64\\MatrixFlowBrowser.exe",
+    "D:\\Zrrssglxt\\MatrixFlow\\resources\\playwright-browsers\\chromium-146-cloak\\chrome-win64\\MatrixFlowBrowser.exe",
+    join(process.env.LOCALAPPDATA || "", "Programs", "MatrixFlow", "resources", "playwright-browsers", "chromium-146-cloak", "chrome-win64", "MatrixFlowBrowser.exe"),
+    join(process.env.LOCALAPPDATA || "", "Programs", "@matrixflow", "resources", "playwright-browsers", "chromium-146-cloak", "chrome-win64", "MatrixFlowBrowser.exe"),
+    // 旧内核兜底
+    "D:\\Codex-Windows-x64\\MatrixFlow\\resources\\playwright-browsers\\chromium-1223\\chrome-win64\\MatrixFlowBrowser.exe",
     "D:\\Zrrssglxt\\MatrixFlow\\resources\\playwright-browsers\\chromium-1223\\chrome-win64\\MatrixFlowBrowser.exe",
     join(process.env.LOCALAPPDATA || "", "Programs", "MatrixFlow", "resources", "playwright-browsers", "chromium-1223", "chrome-win64", "MatrixFlowBrowser.exe"),
-    join(process.env.LOCALAPPDATA || "", "Programs", "@matrixflow", "resources", "playwright-browsers", "chromium-1223", "chrome-win64", "MatrixFlowBrowser.exe"),
   ].filter(Boolean);
   const exe = exeCandidates.find((p) => existsSync(p));
   if (!exe) throw new Error("未找到 MatrixFlowBrowser.exe（请先安装/启动 MatrixFlow）");
 
   const extCandidates = [
     join(userDataRoot, "automa-browser-extension"),
+    "D:\\Codex-Windows-x64\\MatrixFlow\\resources\\automa-electron",
     "D:\\Zrrssglxt\\MatrixFlow\\resources\\automa-electron",
   ];
   const extDir = extCandidates.find((p) => existsSync(join(p, "manifest.json")));

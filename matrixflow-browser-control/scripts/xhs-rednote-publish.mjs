@@ -524,9 +524,17 @@ async function fillForm(cdp, opt, stamp) {
       if (!host) return 'no-publish-host';
       const sr = host._sr || host.shadowRoot;
       if (!sr) return 'no-shadow';
-      const b = sr.querySelector('button.bg-red');
-      if (!b) return 'no-red-btn';
-      b.click();
+      const cands = [...sr.querySelectorAll('button')].filter((x) => /发布/.test((x.innerText || '').trim()));
+      if (!cands.length) return 'no-publish-btn';
+      const b = cands[cands.length - 1];
+      const r = b.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return 'publish-btn-hidden';
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+      for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        const Ctor = t.startsWith('pointer') ? PointerEvent : MouseEvent;
+        b.dispatchEvent(new Ctor(t, opts));
+      }
       return 'clicked';
     })()`);
     stamp("发布：" + pub);
@@ -534,7 +542,7 @@ async function fillForm(cdp, opt, stamp) {
     for (let i = 0; i < 30; i++) {
       await sleep(500);
       const u = await evalInPage(cdp, "location.href");
-      if (u && u.includes("published=true")) { published = true; break; }
+      if (u && (u.includes("published=true") || u.includes("/publish/success"))) { published = true; break; }
     }
     stamp("发布结果：" + (published ? "成功" : "待确认"));
     return published;

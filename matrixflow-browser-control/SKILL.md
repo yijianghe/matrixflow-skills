@@ -9,6 +9,10 @@ description: '控制 MatrixFlow 指纹浏览器（窗口=环境）：打开/关�
 
 ## 前置条件
 
+- **v1.15+ 内核升级（2026-08-12）**：浏览器窗口默认「纯净模式」启动（不建立任何调试连接），
+  已内置 CloakBrowser 内核（Chromium 146），Cloudflare Turnstile / reCAPTCHA 等
+  人机验证可正常渲染并通过，窗口标题不再出现 “Google Chrome for Testing / 测试版”。
+  自动化（本技能所有命令）会在需要时通过 DevToolsActivePort 按需连接，无需任何额外配置。
 - MatrixFlow 桌面应用正在运行（如果 `status` 显示 API 不可达，先启动应用）。
 - MatrixFlow 客户端已**登录账号**（新建/删除环境、绑定代理都要走云端，未登录会失败）。
 - **零配置**：本地 API Token 由应用启动时自动生成、技能自动读取，客户**不需要**提供任何 Token / API 密钥。
@@ -41,6 +45,17 @@ description: '控制 MatrixFlow 指纹浏览器（窗口=环境）：打开/关�
 6. **Facebook 发帖**：图片+文案种草帖，公开可见，可带随机定位、进小组发帖。
 7. **公众号推文**（配合对应窗口）：在已登录的公众号窗口编辑并发布推文。
 8. **任务栏序号角标**：打开窗口后，任务栏每个窗口图标右下角显示序号（需 v1.10 及以上客户端）。
+
+**开始使用前，请先准备好这些（告诉客户）**：
+1. **MatrixFlow 客户端已登录**：新建/删除环境、绑定代理、同步都需要云端账号，必须先在客户端登录；
+2. **接码平台账号**（如果要注册新号）：比如 HeroSMS（hero-sms.com/cn）的账号密码、余额/充值额度，
+   并提前登录好放到某个窗口（告诉我是几号窗口）；
+3. **已有平台账号密码**（如果要登录/养已有号）：把要用的平台（小红书/Facebook/TikTok 等）账号密码列给我，
+   邮箱/手机号+密码均可，我会自动登录并在备注里记录登录状态；
+4. **素材文件夹**：发笔记/帖子的图片放哪里（下载目录、桌面、`%USERPROFILE%\Documents\ShareX\Screenshots`），
+   或告诉我用“文字转图片”；
+5. **代理**：需要绑代理的窗口把代理信息给我（`host:port:user:pass`），或先在代理管理里配好；
+6. **目标与数量**：明确要做哪几个窗口、注册/养号/发帖各多少，我好排节奏（同一账号别一天猛发）。
 
 建议客户这样说：“先 `doctor` 自检，然后打开 X 号窗口，帮我做 XX，时间 XX 分钟”。
 
@@ -427,16 +442,68 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
   登录成功即可发帖；密码错误/设备验证/广告同意墙等异常窗口直接关闭；
   发布完成的窗口也关闭，保持环境干净。
 
-## MatrixFlow 客户端 v1.14 修复记录（2026-08-12）
+**v9 Cloak 内核输入兼容 + Reels 引导根治（2026-08-13 实测）**：
+- **Cloak 内核屏蔽 CDP 合成输入（v1.15+ 内核升级后的大坑）**：
+  - `Input.dispatchMouseEvent` 的 `mousePressed` / `mouseReleased` **到不了页面**（只有 `mouseMoved` 正常）；
+    `Input.dispatchKeyEvent` 也完全失效（Esc/Enter 无响应）；
+  - `Input.insertText` 正常（文本输入不受影响）；
+  - 症状：发帖脚本「发布框打不开」、点了没反应、弹窗关不掉；
+  - 修复：新增 `scripts/fb-input.mjs`，提供 `jsClickAt(cdp, ev, x, y)`（页面内 JS 合成
+    pointerdown/mousedown/pointerup/mouseup/click 事件序列）和 `jsPressKey(cdp, ev, "Escape")`；
+    所有 fb-* 脚本的 CDP 鼠标点击全部替换为 `jsClickAt`（fb-post.mjs 已改完并实测）；
+- **Reels 引导弹窗根治（「检查分享对象 / 所有视频帖现在都是 Reels」）**：
+  - 该弹窗多页且「继续」按钮偶发点击无效，会叠在发布框上导致「找不到可见发布框」；
+  - `dismissReelsOverlay` 现在**直接 remove 引导弹窗 + 残留全屏遮罩层**（实测不会触发
+    React 重渲染，发布框保持可用），不再依赖点「继续」；
+  - 注意：弹窗移除后必须继续清遮罩层（`elementFromPoint` 命中的全屏 DIV 且不在任何 dialog 内），
+    否则 visibleDialogSelector 仍判定发布框不可见；
+- **防止重复发布（重要）**：发布按钮点击后即使发布框残留/页面繁忙，也**不再重试第二次**
+  （一次点击成功即视为已提交，重试会造成同一账号多条重复帖）。「发布框已关闭」或
+  「个人主页确认」或「页面繁忙按成功处理」三者任一即 `posted=true`；
+- **发布后页面假死保护**：部分账号发布后导航个人主页会假死（渲染进程无响应），
+  现在所有发布后验证/清理步骤都带 5-8s 超时，假死时跳过清理直接记录历史并退出；
+  `Page.navigate` 本身也加 8s 超时（页面假死时 navigate 会挂起，实测脸书51 卡 240s）；
+- **等待发布入口**：页面刚导航完未渲染完时不再直接失败，先轮询「分享你的新鲜事」按钮
+  最多 15 秒再打开发布框；
+- **写文案聚焦加固**：`typeTextInPhotoEditor` 点击后确认编辑框真正获得焦点（activeElement
+  校验），失败重试 3 次，避免 insertText 写进错误位置导致「文案写入失败」；
+- **2026-08-13 实测**：脸书 8/9/15/22 四个已登录窗口全部成功发布公开双语种草帖
+  （图文+话题+官网），每篇文案不同、配图不同，单篇约 20-22 秒。
 
-- **v1.14.0（2026-08-12 发布）**：版本号从 1.13.0 升到 1.14.0（桌面安装包、
-  UI 底部版本、preload 全部同步）；包含此前 v1.13 全部修复：主进程 Error 弹窗、
-  手机尺寸视口仿真+苹果手机UA、右侧白屏兜底（CDP 默认背景固定深色）、
-  Cookie 多格式导入与合并式持久化、手机尺寸预设、77 国语言、窗口居中与尺寸生效。
-  安装包：`MatrixFlow Setup 1.14.0.exe`，需同时覆盖
-  `D:\Codex-Windows-x64\MatrixFlow` 与 `D:\Zrrssglxt\MatrixFlow` 两份安装。
+**v10 多语言界面 + 产品图 + 批量并发（2026-08-13）**：
+- **多语言界面支持（部分账号登录后界面是韩文/意大利文/英文）**：
+  - 发布入口识别：`COMPOSER_KEYWORDS` 覆盖 中/英/韩（무슨 생각을/게시물 만들기）/
+    意大利文（A cosa stai pensando/Crea post）；
+  - 隐私按钮：`编辑隐私设置/Edit privacy/공개 범위/Modifica la privacy`；
+  - 公开选项：`公开/Public/전체 공개/Pubblico/Tutti`；完成按钮：`完成/Done/완료/Fine/Fatto`
+    （韩文 aria-label 是「공개 대상 선택 완료 및 대화 상자 닫기」，意大利文按钮文本是 Fine）；
+  - 验证只看真正公开态：`分享对象：公开/Shared with: Public/전체 공개/Pubblico/Tutti`
+    （韩文按钮固定以「공개 범위」开头，不能据此判断公开）；
+- **单选圆点修复（重要）**：Facebook 把 `input[type=radio]` 藏在屏幕外（x > innerWidth），
+  用样式化圆点显示。点公开选项必须点**可见圆点**（20-40px 方形），否则点击无效；
+  fb-post.mjs 和 fb-set-post-public.mjs 均已修复；
+- **按钮在视口外修复**：部分界面隐私按钮在屏幕外（如意大利文 x=-17），
+  点击前先 `scrollIntoView({block:'center'})`；
+- **产品图配图（用户要求：必须发官网/指纹浏览器产品图，不能发无关截图）**：
+  新增 `fb-images/product/` 专属素材目录（mf-main-dashboard.png 主窗口列表、
+  mf-browser-start.png 浏览器起始页）；fb-post.mjs 自动配图**优先从 product 目录挑**，
+  数量不足时允许循环（保证每帖都是产品图）；
+- **批量并发发帖（fb-batch-post.mjs）**：
+  `node scripts/fb-batch-post.mjs <windows.json> <texts-dir> --concurrency 3 --max-per-window 2`
+  - 原则：一次最多 3-5 个窗口（客户电脑配置低拉不动），并发发帖；
+  - **每个账号（窗口）一次最多发 2-3 篇**（`--max-per-window`，默认 2）：发完即**关闭**，
+    再处理下一个窗口；同一账号连发间隔 2.5-4.5 秒（模拟真人 + 降风控）；
+  - 每个窗口：打开 → 导航 → 发 N 篇不同文案 → **关闭** → 处理下一批；
+  - 实测 3 窗口并发总耗时约 2 分钟，单个窗口 20-30 秒；
+  - windows.json 格式：`[{"w":"脸书28","id":"..."}]`；
+- **操作完/不能操作的窗口立即关闭**（用户要求）：发帖成功、发帖失败、账号掉线
+  的窗口都即时关闭，需要时再打开。
 
-### v1.13 修复记录（2026-08-12）
+## MatrixFlow 客户端 v1.13 修复记录（2026-08-12）
+
+**扩展中心（1.54.0 新增）**：客户端左侧「团队协作」已改为「扩展中心」，支持上传本地 .crx/.zip 扩展、
+分配到指定窗口或全部窗口（重新打开窗口生效）、启用/禁用、删除。指纹配置新增：时区/语言快捷选择、
+地理位置（询问/允许/禁止）、忽略HTTPS证书错误。技能脚本操作已登录窗口时，窗口可能已加载用户分配的扩展。
 
 - **窗口尺寸生效（不再强制全屏）**：根因是启动代码写死 `--start-maximized` 且窗口尺寸硬编码
   `1280x800`。已改为读取指纹配置的屏幕宽高（fingerprint.screen），去掉强制最大化；
@@ -453,97 +520,9 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 - **小尺寸窗口无法创建修复**：创建/编辑表单校验原来限制屏幕宽度 ≥800、高度 ≥600，
   输入 500x600 等自定义小尺寸时「创建」按钮无反应。已放宽为宽度 ≥320、高度 ≥240；
   实测 500x600 窗口成功创建并打开（精确 500x600、屏幕居中）。
-- **窗口启动直接居中、不再抖动（2026-08-12 实测）**：之前是「离屏启动(-48000) →
-  再挪回屏幕」两段式，打开时会先看到偏左/偏大的中间态。现已改为启动参数直接带居中坐标
-  （`--window-position=x,y --window-size=w,h`），首帧就落在最终位置，彻底消除跳变；
-  同时去掉离屏 park 的重复 CDP 搬移，启动时主程序占用更低。
-- **高度不再被过度压缩**：Electron 传入的是工作区高度（如 1366x728，已扣除任务栏），
-  之前钳制再减 60px 边距会把 720/700 的配置高度砍成 668。已改为只留 4px 保险边距，
-  实测 1280x720 窗口精确以 43,4 / 1280x720 打开并居中；400x700 窗口高度精确 700、水平居中。
-  注意：宽度 <500 时 Chromium 自身有最小窗口宽度（400 会被撑到 500 内容宽），属浏览器内核限制。
-- **聚焦/保活按生效尺寸居中**：`BrowserRuntime` 现在保存生效的 windowSize/screenSize，
-  再次点击运行中的窗口（focusProfile）或关掉最后一个标签自动重建时，按该窗口原尺寸居中，
-  不再退回默认 1280x800。
-- **手机尺寸窗口（对齐比特「分辨率」行为，2026-08-12 实测）**：宽度 <600 的配置
-  （如 500x900 / 400x700）受 Chromium 最小窗口宽度限制无法把 OS 窗口开到 400 宽，
-  现通过 CDP 视口仿真 + 注入脚本把页面渲染成配置分辨率：
-  - 页面 innerWidth/innerHeight、screen.width/height 均等于指纹配置（实测 500x900、400x700）；
-  - OS 窗口保持约 516 宽（Chromium 最小 500 内宽）并屏幕居中，页面按手机长条比例渲染；
-  - 新建标签页、页面导航后都会自动重新套用，不会中途变回真实屏幕；
-  - 桌面尺寸（宽度 ≥600，如 1280x720）行为不变。
-  注意：宽度 400 的视口会按比例放大填充 500 宽的窗口，属于正常表现。
-- **主程序不再“未响应”、打开速度明显提升（2026-08-12 实测）**：根因是任务栏角标
-  模块用同步 PowerShell（spawnSync，最长 45 秒）每 800ms 刷一次，加上快捷方式创建也是
-  同步调用，启动“浏览器内核”阶段会卡死主进程，窗口标题因此显示“未响应”。
-  已全部改为异步 spawn（后台执行、不阻塞），实测 100ms 轮询全程 0 次未响应，
-  窗口首帧约 2 秒内出现。
-- **改尺寸后必定生效**：Chromium 会记住上次窗口位置/尺寸（window_placement），
-  导致“改了尺寸重开还是旧大小”。现每次启动前清掉该记录，窗口始终按指纹配置的
-  分辨率/尺寸居中打开。
-- **Cookie 导入支持多格式（2026-08-12）**：原来只支持 JSON，现在支持：
-  - JSON（数组或 `{ "cookies": [...] }`）；
-  - Netscape cookies.txt 文本（浏览器扩展常用导出格式，直接粘贴或选文件）；
-  - Chromium SQLite（Chrome/Edge 的 Cookies.db，表单“选择文件导入…”按钮），
-    自动用本机 Chrome/Edge Local State 的 DPAPI 密钥解密 v10/v11 加密 cookie；
-  - 导入入口：创建/编辑窗口 → 高级设置 → Cookie 导入 → “选择文件导入…”。
-- **登录态持久化策略优化（防掉线）**：
-  - 启动补种 cookies.json 与云端快照时改为“合并式写入”：本地已存在的
-    domain+path+name 一律不覆盖（原生 Chromium 库是最新状态），杜绝旧快照把
-    新登录态顶掉；
-  - 已过期（超过 1 天容差）的 cookie 自动跳过；
-  - 会话 cookie（expires=-1）正常保留，快照每 ~10 秒轮询落盘，关闭时再全量刷一次。
-- **修复主进程“Error: options is not defined”弹窗（2026-08-12 实测）**：
-  根因在 `taskbar-overlay.js` 的 `ensureProfileNumberedShortcut`（创建带序号
-  快捷方式的函数）：函数参数是 `(profileId, overlayIndex, browserExePath)`，
-  但子进程退出回调里误写了 `bridgeInFlight.delete(options.profilePath)`，而
-  `options` 在该作用域不存在。PowerShell 创建完快捷方式一退出就抛
-  `ReferenceError`，主进程弹 Error 框、环境显示“异常/浏览器窗口意外关闭”。
-  已删除这两行误用回调，实测打开窗口全程 0 次 Error 弹窗。
-  **注意：安装时请更新用户实际启动的目录**（本机存在
-  `D:\Codex-Windows-x64\MatrixFlow` 与 `D:\Zrrssglxt\MatrixFlow` 两份安装，
-  需同时覆盖，否则用户仍会启动到旧版本）。
-- **手机尺寸窗口右侧白屏修复（2026-08-12 实测）**：400 宽视口放在 500 宽窗口里
-  原来右侧留白 100px（纯白）。修复：
-  - 缩放比例按“真实窗口内容宽度 / 配置宽度”计算并固定（400 配置 ≈ 1.25 倍），
-    页面放大填满整个窗口，不再有白色留白；
-  - 该比例在页面导航后重套用时保持不变（之前导航后会被误算回 1，白屏复发）；
-  - 初始页面仿真改为“先完成再显示窗口”（限时 1.5s），不再出现
-    “先看到整页 → 突然缩成手机尺寸”的闪烁。
-  实测：11103（400×700）窗口页面铺满 516 宽，右侧为页面自身深色背景；
-  欢迎页在 400 宽下是居中卡片设计（深色背景），真实手机网站会自然铺满宽度。
-- **手机尺寸窗口自动切换苹果手机指纹（2026-08-12 实测）**：真实网站右侧白屏的
-  根因是手机窗口仍用桌面 UA，站点返回桌面版页面，窄视口下右侧大片空白。
-  现宽度 <600 的窗口启动时自动把 UA 换成 iPhone Safari 移动版、platform 同步
-  改为 iPhone（对齐比特「手机版 → 生成苹果手机UA」），站点按移动版渲染铺满。
-  实测：11103 打开小红书 → 移动版（标题“小红书 - 你的生活指南”），
-  documentElement.clientWidth=scrollWidth=400 无溢出，窗口 516 宽页面铺满、
-  右侧无白条。
-- **窗口尺寸新增 6 个手机预设**：360x640 / 375x667 / 390x844 / 412x915 /
-  414x896 / 430x932（创建/编辑窗口 → 高级设置 → 窗口尺寸面板第一排）。
-- **语言下拉扩到 77 个国家/地区**：浏览器语言输入框的 datalist 从 17 项扩到
-  77 项（含各国本地语言名称），支持搜索，如 English (US)、日本語、한국어、
-  हिन्दी、العربية、Português (Brasil) 等。
-- **底部版本号不更新的原因与修复**：UI 里 `MATRIXFLOW_VERSION` 是写死的常量
-  （一直是 "1.9.0"），重新打包安装包不会自动改它，所以底部一直显示旧版本号。
-  已把 UI 常量与 preload 兜底版本同步为 "1.13.0"，桌面客户端底部将显示
-  v1.13.0。注意：若在浏览器里直接访问 browser.lingjingxia.com（云端网页版），
-  那是服务器上的独立部署，需把新构建上传到服务器才会同步。
-- **设置页“关于 MatrixFlow”品牌卡片未居中修复**：卡片用了 `max-w-md` 但没有
-  `mx-auto`，在设置页纵向布局里被顶到左侧。已加 `mx-auto w-full`，卡片与内部
-  文字（Logo、MatrixFlow、标语、Version）现在水平居中。
-- **右侧白屏兜底加固（2026-08-12 再实测）**：360x640 等更窄窗口在个别启动
-  场景下（窗口内容宽度测量超时回退）可能出现缩放比例回退、仿真视口外留白为
-  白色。现启动时额外用 CDP `Emulation.setDefaultBackgroundColorOverride`
-  把页面默认背景固定为深色（#0F172A），任何缩放比例下留白区都不会再是白色。
-  实测 nnnn（360×640）：页面全宽深色渲染、窗口右侧无白色，仅有页面自身
-  深色背景。注意：升级后需**关闭并重新打开**手机窗口才会应用新逻辑。
 
 涉及文件：`packages/browser-core/src/playwright-profile-launcher.ts`、
-`packages/browser-core/src/utils/window-alignment.ts`、`packages/browser-core/src/browser-manager.ts`、
-`packages/browser-core/src/types.ts`、`packages/browser-core/src/utils/cookie-import.ts`、
-`packages/browser-core/src/utils/matrixflow-cdp-state.ts`、`packages/browser-core/src/utils/chromium-branding.ts`、
-`apps/desktop/src/main/index.js`、`apps/desktop/src/main/utils/taskbar-overlay.js`、
-`apps/desktop/src/main/chunks/windows-chromium-shortcut-B8aWKtEA.js`、`apps/desktop/src/preload/index.mjs`、
+`packages/browser-core/src/utils/window-alignment.ts`、
 `apps/desktop/src/renderer/assets/index-mTN2Aiv6.js`。安装包：`MatrixFlow Setup 1.13.0.exe`。
 
 **配套工具**：
@@ -633,6 +612,25 @@ node scripts/fb-group-post.mjs <profileId> --keyword "digital marketing" \
 
 本地 API 详情（认证、接口、CDP 布局、故障排查）见 `references/api.md`。
 带代理创建窗口的完整流程（云端令牌读取、代理创建、proxyId 绑定、验证）见 `references/create-window-with-proxy.md`。
+Facebook 网页元素结构（登录/发布框/隐私弹窗/Reels 引导/帖子操作的选择器与多语言对照，
+写 Automa 工作流或改脚本时直接照用）见 `references/facebook-dom.md`。
+
+## 表格驱动 Facebook 自动发帖（Automa + MatrixFlow）
+
+完整方案（表格 + Automa 工作流 + 编排脚本 + 说明）见
+`scripts/facebook-table-publish/`（模板：fb-publish-queue.csv、facebook-publish.automa.json、
+fb-table-run.mjs、facebook-automa-README.md）：
+
+- **表格**：`fb-publish-queue.csv`，列 = seq / window_id / post_text / image_path / status；
+  一行对应一个窗口一篇帖子；可用谷歌表格编辑后导出 CSV 覆盖；
+- **Automa 工作流**（窗口内运行）：强制中文（`?locale=zh_CN`）→ 从 localStorage 读数据 →
+  打开发布框 → 等内容注入 → 设公开 → 发帖 → 标记 `mf_done`；
+- **编排脚本**（MatrixFlow 侧）：读表 → 开窗 → CDP 注入 localStorage → 等发布框打开 →
+  CDP 注入图片（setFileInputFiles）+ 文本（insertText）→ 等发完 → 关窗 → 下一行；
+- **为什么这么设计**：Cloak 内核屏蔽 CDP 合成鼠标（Automa 自带点击模块会失效），
+  所以工作流里所有点击用页面 JS 合成事件；图片/文本注入走 CDP（不受屏蔽）；
+  Automa 与编排脚本用 localStorage 状态同步（composer_ready/content_ready/mf_done）；
+- **规则**：一个账号一天 2-3 篇，发完关闭窗口，再开下一个。
 
 ## 海外版小红书（REDnote）发布（2026-08-08 新增）
 
@@ -651,41 +649,144 @@ node scripts/xhs-rednote-publish.mjs <profileId> \
 - 图片素材优先用 `capture-window.ps1` 截 MatrixFlow 主窗口 + `screenshot` 截浏览器实机画面；主窗口截图需打码左下角登录邮箱；
 - 脚本自动处理：切「上传图文」→ 注入多图 → 填标题/正文 → 点发布（shadow DOM 按钮）→ 校验成功 → 记录防重复历史。
 
+**发布脚本修复（2026-08-18 实测）**：新版创作平台的发布按钮在 `xhs-publish-btn` shadow DOM 里，
+必须选文字含「发布」的按钮（旧选择器 `button.bg-red` 会点到「暂存离开」导致停在待确认）；
+发布成功判定也改为同时认 `published=true` 和 `/publish/success` 两种地址。
+
+### 推广笔记（种草）SOP（2026-08-18 实测两篇公开发布成功）
+- **素材**：产品截图放 `D:\zhiwenliulanqi\promo-images\`（仪表盘 / 环境管理 / 工作流市场 / 浏览器起始页），
+  客户给的产品截图也可直接用；每篇配 3 张，篇与篇不要用同一组图；
+- **文案**：种草口吻、讲痛点场景（多账号串号封号 / 跨境内卷 / 重复操作费时间），不写官网、不喊广告词、
+  不硬推销；标题 ≤20 字；正文 3-5 段；
+- **话题**：正文末尾写 `#话题`，**至少 3 个且与内容相关**（如 `#多账号管理 #指纹浏览器 #矩阵运营
+  #跨境电商 #RPA自动化 #效率工具`），平台会转成蓝色话题标签；发布后到「笔记管理」确认话题生效；
+- **发布**：`--visibility 公开可见 --confirm-public`；发布成功页为 `/publish/success`；
+- **记录**：发布后写进 `scripts/rednote-accounts.json` 的 `publishLog`（窗口/标题/时间/图片/话题），禁止同文案二发。
+
+## 小红书/RedNote 账号注册（接码平台，2026-08-18 实测）
+
+通过 HeroSMS（hero-sms.com/cn）买海外号码，在 rednote.com 网页端直接手机号注册，新用户“手机号+验证码”登录即自动注册，无需额外资料。
+
+```bash
+# 前置：HeroSMS 窗口已登录且有余额；目标窗口已打开
+node scripts/mf-browser.mjs open <目标profileId> https://www.rednote.com/login
+```
+
+**快速一条龙脚本（推荐，2026-08-18 新增，单 CDP 连接大幅提速）**：
+`scripts/xhs-rednote-register.mjs`
+
+```bash
+# 1) 请求验证码（自动开窗→登录页→选 +351→填号→点获取验证码，一条命令）
+node scripts/xhs-rednote-register.mjs request-code <profileId> <手机号>
+# 2) 收码后填码登录+自动过新手引导（性别/年龄/完成，一条命令，直到进入探索页）
+node scripts/xhs-rednote-register.mjs login-code <profileId> <6位验证码>
+# 3) 注册完先预热再关窗（浏览 1-3 篇笔记，模拟真人，默认 15 秒可调）
+node scripts/xhs-rednote-register.mjs warmup <profileId> 15
+node scripts/xhs-rednote-register.mjs close <profileId>
+```
+
+**自动过人机验证 + 自动收码（2026-08-18 实测跑通）**：
+- `request-code` 已内置**自动解「Security Verification 选图验证」**：检测到验证 → 提取题干和 6 张图 →
+  调用视觉模型（读取 claude-vision-skill 的 DASHSCOPE_API_KEY）识别 → 点选匹配的 `div.grid-item` →
+  点 Verify → 弹窗关闭、进入倒计时。实测窗口17 一次通过（识别 1,4 正确）；
+- `wait-login` 轮询 hero-sms 每 8 秒，**码一到立即填入登录**（手工填码太慢会过期）；
+- 组合起来：`request-code`（自动过验证）→ `wait-login`（自动收码登录）= 全自动注册，窗口13/17 均已跑通。
+
+**没收到的号立刻点叉退款（2026-08-18 新增）**：
+`node scripts/xhs-rednote-register.mjs cancel-number <heroSmsProfileId> <手机号>`
+——点击购买记录行内的 `icon-pva__close`（X 按钮）取消该号码并立即退款，不用等 20 分钟自动退款。
+实测 960135438 取消成功、从列表移除。
+
+**判断号码是否被拒**：点获取验证码后如果按钮**没进倒计时**（一直显示 Get code / 获取验证码）=
+rednote 拒绝该号码（回收号），直接 cancel-number + 换号，别等短信。
+
+注册完固定动作（**每次都要做，养成习惯**）：
+1. **补备注**：更新 `scripts/rednote-accounts.json`（窗口/号码/日期），并调云端接口把环境备注改成
+   “自动化注册 YYYY-MM-DD (+号码)”（在客户端环境列表可见）；
+2. **预热**：`warmup` 浏览 1-3 篇笔记再关窗（避免纯注册痕迹）；
+3. **关窗**：注册完的窗口关闭，需要时再打开（节省客户电脑资源）。
+
+### 第一步：HeroSMS 买号（RedBook + 葡萄牙）
+1. 在 hero-sms 窗口：`input[placeholder="搜索服务"]` 输入 `rednote` → 点搜索结果 `h4.service-card__title`（RedBook）→
+   国家列表点 `div.country-card`（选“葡萄牙”，起价最低）→ 点「以 $0.11 购买」（金额以页面为准）；
+2. 买到的号码显示在「我的购买」：如 `+351 (927) 10 45 20` = +351 927104520；
+3. **号码 20 分钟有效**，超时未收到验证码自动退款；一个号码只用于一个账号。
+
+### 第二步：rednote 网页端注册
+1. 目标窗口导航到 `https://www.rednote.com/login`；
+2. 点 `.country-code-select` 选 `+351`（葡萄牙；下拉里找“葡萄牙”叶子元素，点其所在行）；
+3. 手机号输入 `input[placeholder="请输入手机号"]`（用 `type` 命令，聚焦后输入）；
+4. **点验证码按钮必须点 `.code-button`**（内层 span；点外层 `.auth-code` 不触发）。
+   Cloak 内核下 CDP 合成鼠标可能失效，用页面 JS 合成事件序列
+   （pointerdown/mousedown/pointerup/mouseup/click）兜底；
+5. 回 hero-sms「我的购买」等「短信验证码」出现（约 10-90 秒），把 6 位验证码填入
+   `input[placeholder="输入验证码"]`；
+6. 点登录 `button.submit.active` → 出现新手引导：
+   - 性别：随机选「男生/女生」→ 点「继续」；
+   - 年龄：随机选（14-50+）→ 点「继续」；
+   - 「欢迎 / 下载小红书 App」页：点右上角 `div.down-app-header` 里的「完成」span
+     （页面即跳转 `/explore` = 注册成功已登录）。
+
+**英文界面适配（部分窗口 rednote 是英文）**：手机号框 `input[placeholder="Enter phone number"]`、
+验证码框 `input[placeholder="Enter verification code"]`、按钮 `Get code` / `Log in`、
+引导 `Select your gender`（Male/Female）→ `Continue` → 年龄 select → `Continue` → `Done`。
+国家下拉里选英文名 `Portugal`。
+
+**判断窗口是否已有账号**：导航到 `/login` 后如果自动跳回 `/explore`（页面没有登录表单）=
+该窗口已登录/已注册；停留在登录表单 = 未注册。
+
+**短信没到处理**：hero-sms 一般 10-90 秒内收到；超过 60 秒还没到，等 rednote 验证码按钮倒计时
+结束点「重新获取 / Resend」再发一次（实测第二次基本秒到）。
+
+**注册台账**：每注册/检查一个窗口，更新 `scripts/rednote-accounts.json`（已注册账号、已有账号、
+未登录清单），下次直接读台账跳过已处理窗口。
+
+### 并发注册（2026-08-18 实测，推荐 3 窗口一批）
+`scripts/xhs-rednote-register-batch.mjs`（pairs 格式：`profileId|手机号,profileId|手机号,...`）：
+
+```bash
+# 1) 并发开窗+填号+发验证码（一批最多 3 个，机器扛得住）
+node scripts/xhs-rednote-register-batch.mjs request-codes "<pairs>"
+# 2) 轮询 hero-sms 每 8 秒，谁先到码就先登录谁（谁到谁登录，全程并发）
+node scripts/xhs-rednote-register-batch.mjs wait-login "<pairs>" --sms <heroSmsProfileId> --timeout 300
+# 3) 逐个预热浏览后由调用方关窗
+node scripts/xhs-rednote-register-batch.mjs warmup-all "<pairs>" 12
+```
+
+实测：3 窗口并发发码 → 短信陆续到 → 并发登录，窗口12 全程脚本自动完成（含性别/年龄/完成引导）。
+
+### 收不到验证码的标准动作（优先级从高到低）
+1. **先看是不是弹了人机验证（最常见原因，2026-08-18 实测）**：点「获取验证码 / Get code」后可能弹出
+   **Security Verification 选图验证**（“Please select the two images…”+ 6 张图 + Verify）。
+   **不通过的话验证码永远不会发出去**（号码一直“等待短信”）。处理步骤：
+   - 从 `captcha-modal` 里读题干（如 “Animals that live in water”）和 6 张 `img.grid-item__img` 的 URL；
+   - 把 6 张图拼成 3×2 网格，用视觉模型（claude-vision-skill 的 `vision.js`）逐格识别内容；
+   - 按题干点选匹配的 2 个 `div.grid-item`（第 1 格=左上，顺序为左→右、上→下 1-6），
+     然后点 `div.btn.captcha`（Verify）→ 弹窗关闭、按钮进入倒计时 = 请求成功；
+   - 验证不是每次必弹：同一窗口第二次请求可能直接放行（先点一次看看，弹了再解）。
+2. **等倒计时结束重发**：倒计时结束点「重新获取 / Resend」；
+3. **重发 2 次仍无 → 换号**：hero-sms 没有逐行「取消」按钮，号码 20 分钟未收到短信会**自动退款**，
+   直接再买一个新号继续（旧号不用管，自动退）；
+4. 不要在同一号码上耗超过 3-4 分钟；**960 号段（尤其 96033 新批次）大量是回收号，rednote 不再发码**，
+   连续 2-3 个没到就停手换一批（927 开头成功率明显更高）；
+5. **验证码一到手立刻用**（5 分钟内有效），过期后页面提示「验证码错误」，只能重新获取再填。
+
+`request-code` 命令现在会输出 `hasCaptcha` 字段：`true` 表示弹了验证且未解，需要先按上面 SOP 解掉再等短信。
+
+### 踩坑记录（都在脚本里修好了）
+- **hero-sms 页面会频繁自动刷新，按钮时有时无**：点购买/读取号码都用重试循环；
+- **hero-sms 窗口可能开了多个标签页**（首页/购买/红书创作等）：操作 hero-sms 必须用
+  `profileId@hero-sms.com` 锁定标签，否则 eval 可能打到别的标签（表单、按钮都找不到）；
+- **英文界面 rednote 的国家下拉有时点不关**，会挡住登录按钮：脚本在点登录前自动检测并收起下拉；
+- 号码显示如 `+351 (960) 11 46 80` → 手机号填 `960114680`（去空格去括号取后 9 位）。
+
+### 注册后
+- 账号即手机号（无密码），以后用同一号码+短信验证码登录；
+- 逐窗口注册时记录：窗口名 / profileId / 号码 / 注册时间 / 登录状态；
+- 批量顺序：一个窗口注册完再开下一个；每个账号间隔随机时间，避免同时段批量操作；
+- 余额不足先提示用户充值，不要硬买。
+
 ## 上传/读脚本扩展（2026-08-08）
 
 - `upload <id|name[@tab]> <file1> [file2...]`：把本地文件直接注入页面 `input[type="file"]`（绕过 Windows 文件选择框），多文件一次注入；
 - `eval <id|name[@tab]> @<file>`：从 UTF-8 文件读取 JS 执行，避免中文经管道/命令行乱码（推荐含中文的脚本用）。
-
-## Facebook 账号批量管理（2026-08-12 新增，已实测）
-
-### 登录状态检测
-```bash
-node scripts/fb-login-status.mjs <profileId>            # 返回 {"loggedIn":true|false,"state":"feed|login|checkpoint|locked|other",...}
-node scripts/fb-batch-status.mjs <windows.json>         # 批量（3并发），windows.json 格式 [{w:"脸书44",id:"..."}]
-```
-
-### 自动登录 / 退出
-```bash
-node scripts/fb-login.mjs <profileId> "<账号>" "<密码>"  # 自动填表登录，分类 success/wrong/checkpoint/locked
-node scripts/fb-logout.mjs <profileId>                   # 清 facebook cookie 并回登录页（换账号前必做）
-node scripts/fb-batch-login.mjs <accounts.json> --concurrency 3 [--logout]
-# accounts.json 格式: [{"w":"脸书44","id":"<profileId>","a":"账号","p":"密码"}]
-```
-
-### 分组与备注（走云端 API）
-```bash
-node scripts/mf-browser.mjs group-list
-node scripts/mf-browser.mjs group-create "脸书-可用"
-node scripts/mf-browser.mjs group-assign <groupId> <profileId...>
-node scripts/mf-browser.mjs note <profileId|名称> "<备注>"
-node scripts/mf-browser.mjs note-batch <notes.json>      # {"profileId":"备注",...}
-```
-
-### 2026-08-12 实测结论（本次批量盘点）
-- 可用窗口（13 个，已登录可发帖）：脸书4/7/8/9/15/22/25/28/29/30（原有已登录核对有效），
-  脸书44/51/54b（本次用 447446262019 / 6285198612829 / +447407535760 新登录成功）；
-- 异常窗口（57 个）：未登录 / 需2FA设备验证 / 自拍验证 / 卡广告墙 / 已掉线，
-  全部已写入备注并归入「脸书-异常」分组；可用窗口归入「脸书-可用」分组；
-- 注意：本次账号池里绝大多数账号在新设备上触发 2FA/设备验证（two_step_verification /
-  auth_platform / checkpoint），需人工输验证码或手机批准后才能完成登录；
-  登录判定以 `fb-login-status` 的 feed 状态为准（登录脚本会把 2FA 中间页误报为成功）。

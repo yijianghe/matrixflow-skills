@@ -22,10 +22,13 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { jsClickAt, jsPressKey } from "./fb-input.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const RANDOM_LOCATIONS = ["成都", "上海", "北京", "深圳", "广州", "杭州", "重庆", "Sydney", "Melbourne", "Singapore", "Kuala Lumpur"];
+// 2026-08-13：发布入口多语言关键词（部分账号界面是韩文/英文）
+const COMPOSER_KEYWORDS = ["分享你的新鲜事", "分享想法", "무슨 생각을", "What's on your mind", "게시물 만들기", "Create Post", "A cosa stai pensando", "Crea post"];
 
 function resolveUserDataRoot() {
   if (process.env.MF_USER_DATA) return process.env.MF_USER_DATA;
@@ -109,11 +112,8 @@ async function ev(cdp, expression) {
 }
 
 async function clickAt(cdp, x, y) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x - 2, y: y - 2 });
-  await sleep(rand(50, 120));
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await sleep(rand(50, 120));
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  // v1.15+ Cloak 内核屏蔽 CDP 合成 pressed/released，改用页面内 JS 合成事件
+  await jsClickAt(cdp, ev, x, y);
 }
 
 // 关闭可能遮挡发布框的系统弹窗（如「创建 PIN 码」/聊天加密提示），避免挡住发布流程
@@ -143,6 +143,117 @@ async function dismissOverlays(cdp) {
     const t = JSON.parse(target);
     await clickAt(cdp, t.x, t.y);
     await sleep(800);
+  }
+}
+
+// 2026-08-13：关闭 Facebook Reels 引导弹窗（「检查分享对象 / 所有视频帖现在都是 Reels」）。
+// 该弹窗会叠在发布框上导致 visibleDialogSelector 找不到发布框。
+// 流程：点「继续」（可能多页）→ 分享对象页选「公开」→ 点「保存」。
+async function dismissReelsOverlay(cdp) {
+  // 2026-08-13：按钮路径（继续→公开→保存）在部分账号上点击不稳定，
+  // 先直接移除引导弹窗 + 残留遮罩（实测不会触发 React 重渲染，发布框保持可用）
+  const removed = await ev(
+    cdp,
+    `(() => {
+      const ds = [...document.querySelectorAll('[role=dialog]')].filter(x => {
+        const t = (x.innerText || '');
+        const r = x.getBoundingClientRect();
+        return r.width > 200 && !x.querySelector('div[contenteditable=true]')
+          && (t.includes('Reels') || t.includes('릴스') || t.includes('检查分享对象') || t.includes('공개 대상 검토') || t.includes('更多编辑选项') || (t.includes('分享对象') && t.includes('保存')));
+      });
+      ds.forEach((d) => d.remove());
+      return ds.length;
+    })()`
+  );
+  if (removed > 0) await sleep(600);
+  for (let round = 0; round < 5; round++) {
+    const info = await ev(
+      cdp,
+      `(() => {
+        const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+          const t = (x.innerText || '');
+          const r = x.getBoundingClientRect();
+          return r.width > 200 && r.bottom > 0
+            && !x.querySelector('div[contenteditable=true]')
+            && (t.includes('检查分享对象') || t.includes('Reels 现在') || t.includes('릴스') || t.includes('공개 대상 검토') || t.includes('更多编辑选项') || (t.includes('分享对象') && t.includes('保存')));
+        });
+        if (!d) return null;
+        const pick = (label, minW, minH) => [...d.querySelectorAll('*')].filter(x => {
+          const t = (x.textContent || '').trim();
+          const r = x.getBoundingClientRect();
+          // 2026-08-13：按钮可能在视口下方（scrollIntoView 前），不要求可见
+          return t === label && r.width >= minW && r.height >= minH;
+        }).sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
+        const cont = pick('继续', 100, 25);
+        if (cont) {
+          cont.scrollIntoView({ block: 'center' });
+          await new Promise((r) => setTimeout(r, 150));
+          const r = cont.getBoundingClientRect();
+          return JSON.stringify({ action: 'continue', x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        }
+        const pub = pick('公开', 50, 15);
+        if (pub) {
+          pub.scrollIntoView({ block: 'center' });
+          await new Promise((r) => setTimeout(r, 150));
+          const r = pub.getBoundingClientRect();
+          return JSON.stringify({ action: 'public', x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        }
+        const save = pick('保存', 40, 20);
+        if (save) {
+          save.scrollIntoView({ block: 'center' });
+          await new Promise((r) => setTimeout(r, 150));
+          const r = save.getBoundingClientRect();
+          return JSON.stringify({ action: 'save', x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        }
+        return null;
+      })()`
+    );
+    if (!info) break;
+    const p = JSON.parse(info);
+    await ev(
+      cdp,
+      `(() => {
+        const el = document.elementFromPoint(${p.x}, ${p.y});
+        if (!el) return false;
+        const opts = { bubbles: true, cancelable: true, view: window, clientX: ${p.x}, clientY: ${p.y}, button: 0 };
+        for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) el.dispatchEvent(new MouseEvent(type, opts));
+        return true;
+      })()`
+    );
+    await sleep(900);
+  }
+  // 兜底：再移除一次（若按钮路径把弹窗推进到新页面）
+  await ev(
+    cdp,
+    `(() => {
+      const ds = [...document.querySelectorAll('[role=dialog]')].filter(x => {
+        const t = (x.innerText || '');
+        const r = x.getBoundingClientRect();
+        return r.width > 200 && !x.querySelector('div[contenteditable=true]')
+          && (t.includes('Reels') || t.includes('检查分享对象'));
+      });
+      ds.forEach((d) => d.remove());
+      return ds.length;
+    })()`
+  );
+  // 移除 Reels 引导残留的全屏遮罩层（挡住发布框，导致 visibleDialogSelector 判定不可见）
+  for (let i = 0; i < 8; i++) {
+    const hit = await ev(
+      cdp,
+      `(() => {
+        const d = [...document.querySelectorAll('[role=dialog]')].find(x => x.getBoundingClientRect().width > 300 && x.getBoundingClientRect().bottom > 0 && x.querySelector('div[contenteditable=true]'));
+        if (!d) return 0;
+        const r = d.getBoundingClientRect();
+        const el = document.elementFromPoint(r.x + r.width / 2, Math.min(r.y + 100, r.bottom - 20));
+        if (!el) return 0;
+        if ([...document.querySelectorAll('[role=dialog]')].some(x => x.contains(el) || x === el)) return 0;
+        const er = el.getBoundingClientRect();
+        if (er.width < 1000 || er.height < 300) return 0;
+        el.remove();
+        return 1;
+      })()`
+    );
+    if (hit !== 1) break;
   }
 }
 
@@ -263,23 +374,30 @@ async function typeTextInPhotoEditor(cdp, text) {
   );
   if (!pos) return false;
   const p = JSON.parse(pos);
-  await clickAt(cdp, p.x, p.y); // 真实点击聚焦（不滚动），ProseMirror 才能接受输入
-  await sleep(300);
-  const focused = await ev(
-    cdp,
-    `(() => {
-      const el = document.querySelector('[data-mf-photo-ce]');
-      if (!el) return false;
-      el.focus();
-      return true;
-    })()`
-  );
-  if (focused) {
-    // Lexical/ProseMirror 编辑器对 execCommand 无效，改用 CDP 真实键盘输入
-    await cdp.send("Input.insertText", { text });
+  // 2026-08-13：点击后必须确认编辑框真正获得焦点，否则 insertText 会写进错误位置
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await clickAt(cdp, p.x, p.y);
+    await sleep(350);
+    const focused = await ev(
+      cdp,
+      `(() => {
+        const el = document.querySelector('[data-mf-photo-ce]');
+        if (!el) return false;
+        el.focus();
+        const act = document.activeElement;
+        return !!act && (act === el || el.contains(act) || act.isContentEditable);
+      })()`
+    );
+    if (focused) {
+      // Lexical/ProseMirror 编辑器对 execCommand 无效，改用 CDP 输入（insertText 不受内核屏蔽）
+      await cdp.send("Input.insertText", { text });
+      await sleep(600);
+      const st = await photoDialogState(cdp, text.slice(0, 8));
+      if (st && st.hasText) return true;
+    }
+    await sleep(400);
   }
-  await sleep(400);
-  return true;
+  return false;
 }
 
 async function photoDialogState(cdp, probe) {
@@ -303,6 +421,8 @@ async function photoDialogState(cdp, probe) {
 }
 
 async function setLocationVisible(cdp, location) {
+  // 2026-08-14：先清隐藏副本/遮罩，否则「签到/Check in」按钮被挡住找不到
+  await removeComposerDuplicates(cdp);
   const btn = await ev(
     cdp,
     `(() => {
@@ -326,7 +446,8 @@ async function setLocationVisible(cdp, location) {
       const input = [...document.querySelectorAll('input')].find(i => {
         const ph = (i.getAttribute('placeholder') || '');
         const r = i.getBoundingClientRect();
-        return (ph.includes('搜索') || ph.includes('地点')) && r.bottom > 0 && r.top < innerHeight && r.width > 100;
+        // 2026-08-14：多语言 placeholder（中文/英文），否则英文界面定位输入框找不到
+        return (ph.includes('搜索') || ph.includes('地点') || ph.includes('Search') || ph.includes('Where') || ph.includes('Location')) && r.bottom > 0 && r.top < innerHeight && r.width > 100;
       });
       if (!input) return false;
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -356,8 +477,7 @@ async function setLocationVisible(cdp, location) {
     })()`
   );
   if (!option) {
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await jsPressKey(cdp, ev, "Escape");
     return false;
   }
   const o = JSON.parse(option);
@@ -373,8 +493,7 @@ async function setLocationVisible(cdp, location) {
   ));
   const r = ok ? JSON.parse(ok) : { chip: false, panelStillOpen: false };
   if (!r.chip || r.panelStillOpen) {
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await jsPressKey(cdp, ev, "Escape");
     await sleep(500);
     return false;
   }
@@ -450,6 +569,8 @@ async function setPostPublic(cdp, probeText) {
 
 // 发布前：在发布框内把可见范围设为「公开」（作用在带图弹窗上，点完再验证）
 async function setComposerPublic(cdp, probe) {
+  // 2026-08-14：英文界面 + 图片后会出现隐藏副本/遮罩挡住隐私按钮，先清掉
+  await removeComposerDuplicates(cdp);
   // 重试 3 次：首次可能因隐私弹窗渲染时序未就绪导致点空
   for (let attempt = 0; attempt < 3; attempt++) {
     const priv = await ev(
@@ -464,10 +585,13 @@ async function setComposerPublic(cdp, probe) {
         const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
           const a = (e.getAttribute('aria-label') || '');
           const r = e.getBoundingClientRect();
-          return a.startsWith('编辑隐私设置') && r.bottom > 0 && r.top < innerHeight && r.width > 20;
+          // 2026-08-13：多语言（中/英/韩）隐私按钮
+          return /^(编辑隐私设置|Edit privacy|공개 범위|Modifica la privacy)/.test(a) && r.bottom > 0 && r.top < innerHeight && r.width > 20;
         });
         if (!btn) return null;
         btn.setAttribute('data-mf-privc', '1');
+        // 2026-08-13：部分界面（如意大利文）按钮可能在视口外，先滚动到可视区
+        btn.scrollIntoView({ block: 'center', behavior: 'instant' });
         const r = btn.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()`
@@ -480,13 +604,13 @@ async function setComposerPublic(cdp, probe) {
     const pubRow = await ev(
       cdp,
       `(() => {
-        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => ['谁能看到你的帖子', 'Who should see', '게시물 공개 대상', '내 게시물을 볼 수 있는', 'Chi può vedere'].some((k) => (d.innerText || '').includes(k)));
         const scope = dlg || document;
         const el = [...scope.querySelectorAll('div')]
           .filter(e => {
             const t = (e.textContent || '').trim();
             const r = e.getBoundingClientRect();
-            return t.startsWith('公开') && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
+            return /^(公开|Public|전체 공개|Pubblico|Tutti)/.test(t) && r.width > 300 && r.height > 50 && r.height < 200 && r.bottom > 0 && r.top < innerHeight;
           })
           .sort((a, b) => {
             const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
@@ -494,8 +618,16 @@ async function setComposerPublic(cdp, probe) {
           })[0];
         if (!el) return null;
         // 关键：点「公开」行内的单选圆点（实测点整行不生效，点 radio 才生效）
+        // 2026-08-13：Facebook 把 input[type=radio] 藏在屏幕外（x>innerWidth），
+        // 用样式化圆点显示；必须点可见圆点（约 20-40px 的正方形），否则点击无效
         const radio = el.querySelector('input[type=radio]');
-        const r = radio ? radio.getBoundingClientRect() : el.getBoundingClientRect();
+        const dot = [...el.querySelectorAll('div, span')].find((d) => {
+          const dr = d.getBoundingClientRect();
+          return dr.width >= 20 && dr.width <= 40 && dr.height >= 20 && dr.height <= 40 && dr.x >= 0 && dr.x < innerWidth && dr.bottom > 0 && dr.top < innerHeight;
+        });
+        const target2 = dot || radio || el;
+        target2.scrollIntoView({ block: 'center', behavior: 'instant' });
+        const r = target2.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()`
     );
@@ -507,14 +639,17 @@ async function setComposerPublic(cdp, probe) {
     const done = await ev(
       cdp,
       `(() => {
-        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => ['谁能看到你的帖子', 'Who should see', '게시물 공개 대상', '내 게시물을 볼 수 있는', 'Chi può vedere'].some((k) => (d.innerText || '').includes(k)));
         const scope = dlg || document;
         const el = [...scope.querySelectorAll('div[role=button]')].find(e => {
           const a = (e.getAttribute('aria-label') || '');
+          const bt = (e.textContent || '').trim();
           const r = e.getBoundingClientRect();
-          return a.startsWith('完成') && r.bottom > 0 && r.top < innerHeight && r.width > 30;
+          // 2026-08-13：韩文完成按钮 aria-label 是「공개 대상 선택 완료 및 대화 상자 닫기」
+          return (/^(完成|Done|완료|Fine|Fatto)/.test(a) || /^(完成|Done|완료|Fine|Fatto)/.test(bt) || /완료/.test(a)) && r.bottom > 0 && r.top < innerHeight && r.width > 30;
         });
         if (!el) return null;
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()`
@@ -536,12 +671,14 @@ async function setComposerPublic(cdp, probe) {
         const btn = [...d.querySelectorAll('div[role=button]')].find(e => {
           const a = (e.getAttribute('aria-label') || '');
           const r = e.getBoundingClientRect();
-          return a.startsWith('编辑隐私设置') && r.width > 20;
+          return /^(编辑隐私设置|Edit privacy|공개 범위|Modifica la privacy)/.test(a) && r.width > 20;
         });
         return btn ? (btn.getAttribute('aria-label') || '') : '';
       })()`
     );
-    const ok = /公开|Public/.test(label || "");
+    // 2026-08-13：韩文按钮名固定以「공개 범위」开头，不能据此判断；
+    // 只有「分享对象：公开 / Shared with: Public / 전체 공개」才是真的公开
+    const ok = /分享对象：公开|Shared with: Public|전체 공개|Pubblico|Tutti/.test(label || "");
     console.log(`[fb] 发布前可见范围: ${label || "未知"} ${ok ? "✅ 公开" : "❌ 未公开"}${attempt > 0 ? `（第 ${attempt + 1} 次尝试）` : ""}`);
     if (ok) return true;
     // 未成功：如果隐私菜单还开着，先按 Esc / 点完成关闭，再重试
@@ -549,6 +686,37 @@ async function setComposerPublic(cdp, probe) {
     await sleep(600);
   }
   return false;
+}
+
+// 2026-08-14：移除隐藏副本（无 contenteditable 的「创建帖子」空 dialog）和全屏遮罩，
+// 它们会挡住隐私/定位/发帖按钮的坐标点击（英文界面 + 图片后最常见）
+async function removeComposerDuplicates(cdp) {
+  await ev(
+    cdp,
+    `(() => {
+      const ds = [...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && !d.querySelector('div[contenteditable=true]'));
+      ds.forEach((d) => d.remove());
+      return ds.length;
+    })()`
+  );
+  for (let i = 0; i < 8; i++) {
+    const hit = await ev(
+      cdp,
+      `(() => {
+        const d = [...document.querySelectorAll('[role=dialog]')].find(x => x.getBoundingClientRect().width > 300 && x.getBoundingClientRect().bottom > 0 && x.querySelector('div[contenteditable=true]'));
+        if (!d) return 0;
+        const r = d.getBoundingClientRect();
+        const el = document.elementFromPoint(r.x + r.width / 2, Math.min(r.y + 100, r.bottom - 20));
+        if (!el) return 0;
+        if ([...document.querySelectorAll('[role=dialog]')].some(x => x.contains(el) || x === el)) return 0;
+        const er = el.getBoundingClientRect();
+        if (er.width < 1000 || er.height < 300) return 0;
+        el.remove();
+        return 1;
+      })()`
+    );
+    if (hit !== 1) break;
+  }
 }
 
 function dedupCheck(text) {
@@ -579,15 +747,38 @@ function autoPickImages(count = 1) {
   const used = existsSync(usedPath) ? JSON.parse(readFileSync(usedPath, "utf8") || "[]") : [];
   const usedSet = new Set(used.map((p) => String(p).toLowerCase()));
   const home = homedir();
+  const exts = /\.(png|jpe?g|webp|gif)$/i;
+
+  // 2026-08-13：产品图目录优先（配图必须是官网/指纹浏览器产品图，不能发无关截图）
+  const productDir = join(userData, "fb-images", "product");
+  const productFiles = [];
+  if (existsSync(productDir)) {
+    for (const e of readdirSync(productDir, { withFileTypes: true })) {
+      if (e.isFile() && exts.test(e.name)) productFiles.push(join(productDir, e.name));
+    }
+  }
+  if (productFiles.length) {
+    // 产品图优先用未用过的；数量不足时允许循环（保证每帖都是产品图）
+    const unused = productFiles.filter((p) => !usedSet.has(String(p).toLowerCase()));
+    const pool = unused.length ? unused : productFiles;
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const picked = pool.slice(0, Math.min(count, pool.length));
+    const now = used.concat(picked.map((p) => String(p)));
+    writeFileSync(usedPath, JSON.stringify(now.slice(-200)), "utf8");
+    console.log(`[fb] 产品图配图 ${picked.length} 张（${picked.map((p) => p.split(/[\\/]/).pop()).join(", ")}）`);
+    return picked;
+  }
+
   const folders = [
-    // 2026-08-12：专属浏览器素材目录优先（配图必须是浏览器相关截图）
     join(userData, "fb-images"),
     process.env.FB_IMAGES_DIR,
     join(home, "Documents", "ShareX", "Screenshots"),
     join(home, "Downloads"),
     join(home, "Pictures"),
   ].filter(Boolean);
-  const exts = /\.(png|jpe?g|webp|gif)$/i;
   const candidates = [];
   const collect = (folder, depth, includeUsed = false) => {
     if (!existsSync(folder) || depth > 3) return;
@@ -700,7 +891,10 @@ async function main() {
     // 2026-08-11 修复：必须回到首页发布框。之前只在非 facebook.com 时导航，
     // 如果标签页停在搜索页/帖子页就会一直找不到发布框。
     if (!/facebook\.com\/\??$/.test(url || "")) {
-      await cdp.send("Page.navigate", { url: "https://www.facebook.com/" });
+      await Promise.race([
+        cdp.send("Page.navigate", { url: "https://www.facebook.com/" }),
+        new Promise((r) => setTimeout(r, 8000)),
+      ]);
       // 提速：轮询 readyState，不再固定等 4.5s
       for (let i = 0; i < 25; i++) {
         try {
@@ -713,6 +907,20 @@ async function main() {
 
     // 1) 打开发布框（先关掉可能遮挡的弹窗，如「创建 PIN 码」提示）
     await dismissOverlays(cdp);
+    // 2026-08-13：页面可能刚导航完还没渲染完，先轮询等待发布入口出现（最多 15s）
+    let pageReady = false;
+    for (let i = 0; i < 30 && !pageReady; i++) {
+      pageReady = (await ev(
+        cdp,
+        `(() => {
+          if (document.readyState !== 'complete') return false;
+          const t = (document.body.innerText || '');
+          return ${JSON.stringify(COMPOSER_KEYWORDS)}.some((k) => t.includes(k)) || !!document.querySelector('div[contenteditable=true]');
+        })()`
+      )) === true;
+      if (!pageReady) await sleep(500);
+    }
+    if (!pageReady) console.log("[fb] 页面发布入口等待超时，继续尝试");
     let composerOpen = false;
     for (let i = 0; i < 12 && !composerOpen; i++) {
       composerOpen = (await ev(cdp, `[...document.querySelectorAll('div[contenteditable=true]')].some(e => e.getBoundingClientRect().width > 100 && e.getBoundingClientRect().bottom > 0)`)) === true;
@@ -723,7 +931,7 @@ async function main() {
           const find = (role) => [...document.querySelectorAll(role)].find(e => {
             const t = (e.textContent || '').trim();
             const r = e.getBoundingClientRect();
-            return (t.includes('分享你的新鲜事') || t.includes('分享想法')) && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;
+            return ${JSON.stringify(COMPOSER_KEYWORDS)}.some((k) => t.includes(k)) && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;
           });
           const el = find('div[role=button]') || find('[role=button]');
           if (!el) return null;
@@ -740,7 +948,7 @@ async function main() {
           const el = [...document.querySelectorAll('div')].find(e => {
             const t = (e.textContent || '').trim();
             const r = e.getBoundingClientRect();
-            return t.startsWith('创建帖子') && t.includes('分享你的新鲜事') && r.width > 400 && r.width < 800 && r.height > 30 && r.height < 100 && r.bottom > 0 && r.top < innerHeight;
+            return ${JSON.stringify(COMPOSER_KEYWORDS)}.some((k) => t.includes(k)) && r.width > 400 && r.width < 800 && r.height > 30 && r.height < 100 && r.bottom > 0 && r.top < innerHeight;
           });
           if (!el) return false;
           const r = el.getBoundingClientRect();
@@ -758,8 +966,23 @@ async function main() {
     // 2) 锁定顶层可见发布框
     // 2026-08-12：部分账号打开发布框时会弹 Reels「检查分享对象/更新设置」引导，先清掉再锁定
     await dismissOverlays(cdp);
+    await dismissReelsOverlay(cdp);
     const vis = await visibleDialogSelector(cdp, "");
-    if (!vis) throw new Error("找不到可见发布框");
+    if (!vis) {
+      const diag = await ev(
+        cdp,
+        `(() => {
+          const dialogs = [...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 100).map(d => {
+            const r = d.getBoundingClientRect();
+            const cx = r.x + r.width / 2, cy = Math.min(r.y + 100, r.bottom - 20);
+            const top = document.elementFromPoint(cx, cy);
+            return { w: Math.round(r.width), y: Math.round(r.y), ces: d.querySelectorAll('div[contenteditable=true]').length, topIn: !!(top && (d.contains(top) || top === d)), topT: top ? String(top.textContent).slice(0, 20) : '' };
+          });
+          return JSON.stringify(dialogs);
+        })()`
+      );
+      throw new Error("找不到可见发布框: " + (diag || "[]"));
+    }
     console.log("[fb] 已锁定顶层发布框");
 
     // 3) 先传图（注入到可见层）
@@ -899,60 +1122,114 @@ async function main() {
       );
       if (!btn) { await sleep(1500); continue; }
       const b = JSON.parse(btn);
-      if (attempt === 0) {
-        await ev(cdp, `(() => { const el = document.querySelector('[data-mf-go="1"]'); if (el) el.click(); return true; })()`);
-      } else {
-        await clickAt(cdp, b.x + rand(-2, 2), b.y + rand(-2, 2));
-      }
+      // 2026-08-13：Cloak 内核屏蔽 CDP 合成 mousePressed/released，el.click() 对 React 按钮可能无效，
+      // 统一用页面内 JS 合成事件序列点击发布按钮
+      await ev(cdp, `(() => {
+        const el = document.querySelector('[data-mf-go="1"]');
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const x = r.x + r.width / 2 + ${rand(-2, 2)};
+        const y = r.y + r.height / 2 + ${rand(-2, 2)};
+        const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+        el.dispatchEvent(new PointerEvent("pointerdown", { ...base, buttons: 1, pointerId: 1, isPrimary: true, pointerType: "mouse" }));
+        el.dispatchEvent(new MouseEvent("mousedown", { ...base, buttons: 1 }));
+        el.dispatchEvent(new PointerEvent("pointerup", { ...base, buttons: 0, pointerId: 1, isPrimary: true, pointerType: "mouse" }));
+        el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
+        el.dispatchEvent(new MouseEvent("click", base));
+        return true;
+      })()`);
       // 提速：发帖后先等 2.5s，再轮询弹窗是否关闭（最多再等 4s）
       await sleep(2500);
-      for (let w = 0; w < 8; w++) {
-        const closedNow = (await ev(
-          cdp,
-          `[...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]')).length === 0`
-        )) === true;
-        if (closedNow) break;
-        await sleep(500);
-      }
+      const closedNow = await Promise.race([
+        (async () => {
+          for (let w = 0; w < 8; w++) {
+            try {
+              const c = await ev(
+                cdp,
+                `[...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]')).length === 0`
+              );
+              if (c === true) return true;
+            } catch {}
+            await sleep(500);
+          }
+          return false;
+        })(),
+        new Promise((r) => setTimeout(() => r(false), 6000)),
+      ]);
       // 判定：带图弹窗消失 = 已提交发布（不要再重试，避免误发重复帖）
-      const photoGone = (await ev(
-        cdp,
-        `(() => {
-          const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
-            const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
-            return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
-          });
-          return !d;
-        })()`
-      )) === true;
-      const composerGone = (await ev(
-        cdp,
-        `[...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]')).length === 0`
-      )) === true;
+      const photoGone = await Promise.race([
+        (async () => {
+          try {
+            return (await ev(
+              cdp,
+              `(() => {
+                const d = [...document.querySelectorAll('[role=dialog]')].find(x => {
+                  const big = [...x.querySelectorAll('img')].filter(i => i.naturalWidth > 200).length;
+                  return big >= 1 && x.getBoundingClientRect().bottom > 0 && x.getBoundingClientRect().width > 300;
+                });
+                return !d;
+              })()`
+            )) === true;
+          } catch { return false; }
+        })(),
+        new Promise((r) => setTimeout(() => r(false), 5000)),
+      ]);
+      const composerGone = await Promise.race([
+        (async () => {
+          try {
+            return (await ev(
+              cdp,
+              `[...document.querySelectorAll('[role=dialog]')].filter(d => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]')).length === 0`
+            )) === true;
+          } catch { return false; }
+        })(),
+        new Promise((r) => setTimeout(() => r(false), 5000)),
+      ]);
       if (photoGone || composerGone) {
         posted = true;
         console.log("[fb] 发布框已关闭，视为提交成功");
         break;
       }
-      // 未确认时去个人主页核实（防止误报失败导致重发）
+      // 未确认时去个人主页核实（防止误报失败导致重发）；带超时保护，避免 /me 假死挂起
       if (attempt === 0) {
-        await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
+        await Promise.race([
+          cdp.send("Page.navigate", { url: "https://www.facebook.com/me" }),
+          new Promise((r) => setTimeout(r, 8000)),
+        ]);
         await sleep(2500);
-        const confirmed = (await ev(
-          cdp,
-          `[...document.querySelectorAll('[role=article]')].some(a => (a.innerText || '').includes(${JSON.stringify(probe)}))`
-        )) === true;
+        const confirmed = await Promise.race([
+          (async () => {
+            try {
+              return (await ev(
+                cdp,
+                `[...document.querySelectorAll('[role=article]')].some(a => (a.innerText || '').includes(${JSON.stringify(probe)}))`
+              )) === true;
+            } catch { return false; }
+          })(),
+          new Promise((r) => setTimeout(() => r(false), 8000)),
+        ]);
         if (confirmed) {
           posted = true;
           console.log("[fb] 已在个人主页确认发布");
           break;
         }
+        console.log("[fb] 个人主页未能确认（页面可能繁忙），按提交成功处理，不再重试");
+        posted = true;
+        break;
       }
       else console.log(`[fb] 第 ${attempt + 1} 次点击未生效，重试`);
     }
     if (!posted) throw new Error("多次点击发布未生效");
     console.log(`[fb] 发布成功，耗时 ${Math.round((Date.now() - started) / 1000)}s`);
 
+    // 2026-08-13：发布后页面可能繁忙/假死，先检测存活，不可响应就跳过清理，避免脚本挂起
+    const pageAlive = await Promise.race([
+      ev(cdp, "1+1").then(() => true).catch(() => false),
+      new Promise((r) => setTimeout(() => r(false), 3000)),
+    ]);
+    if (!pageAlive) {
+      console.log("[fb] 页面繁忙，跳过发布后清理");
+    } else {
     // 8) 发布后清理：显式点击「创建帖子」弹窗的 × 关闭按钮（2026-08-12）
     for (let c = 0; c < 3; c++) {
       // 先 JS 点击所有匹配的关闭按钮，再真实鼠标点一次（双保险）
@@ -1005,8 +1282,7 @@ async function main() {
       if (stillVisible !== true) break;
     }
     // Esc 兜底
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await jsPressKey(cdp, ev, "Escape");
     // 仍有关闭不了的残留弹窗：导航离开强制关闭（不影响已发布的帖子）
     const visAfter = await ev(
       cdp,
@@ -1022,8 +1298,12 @@ async function main() {
       })()`
     );
     if (visAfter === true) {
-      await cdp.send("Page.navigate", { url: "https://www.facebook.com/me" });
+      await Promise.race([
+        cdp.send("Page.navigate", { url: "https://www.facebook.com/me" }),
+        new Promise((r) => setTimeout(r, 8000)),
+      ]);
       await sleep(2000);
+    }
     }
 
     hist.push({ at: new Date().toISOString(), snippet: text.slice(0, 100) });

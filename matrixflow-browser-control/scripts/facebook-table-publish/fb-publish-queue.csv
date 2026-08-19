@@ -1,0 +1,37 @@
+seq,window_id,post_text,image_path,status
+1,cmsptzv530lxlpkjqvyioa3es,"凌晨三点，我终于把账号管理这件事理顺了
+At 3 AM, I finally got account management sorted
+
+以前总觉得多开几个窗口就是多账号运营，直到两个号被判定关联，我才明白平台看的是指纹和登录环境，不是窗口数量。
+I used to think multiple windows = multiple accounts, until two got flagged as linked. Platforms judge fingerprints and login environments, not window count.
+
+现在每个账号一个独立环境：指纹、Cookie、代理、时区全部分开，关掉重开登录不丢。
+Now every account has its own environment: fingerprint, cookies, proxy, timezone all separated, logins survive restarts.
+
+图是我现在的窗口列表。That's my current window list.
+https://browser.lingjingxia.com
+#指纹浏览器 #防关联 #多账号运营 #AntidetectBrowser #AntiLinking #MatrixFlow",C:\Users\admin\AppData\Roaming\@matrixflow\desktop\fb-images\product\mf-main-dashboard-2.png,待发布
+2,cmqglxq0v02wqpk2iuafxqxp7,"独立站卖家的普通一天
+A typical day for an independent-site seller
+
+早上登录 6 个店铺后台检查订单，下午处理客服消息和上架，晚上社媒账号发内容引流。
+Morning: six store dashboards. Afternoon: support and listings. Night: social posts for traffic.
+
+最烦的不是忙，是登录：每个店铺一种密码一种验证方式，光登录就耗一小时。
+The annoying part is logging in: every store has its own password and 2FA; an hour just to get in.
+
+现在一台电脑 + 指纹浏览器，登录态持久保存，代理 IP 各自独立。
+Now it is one PC + an anti-detect browser: sessions persist, proxy IPs stay separate.
+
+https://browser.lingjingxia.com
+#跨境电商 #指纹浏览器 #独立站 #AntidetectBrowser #Dropshipping",C:\Users\admin\AppData\Roaming\@matrixflow\desktop\fb-images\product\mf-browser-start.png,待发布
+3,cmqglwucu02wcpk2ienb4akvl,"社媒运营效率翻倍的三个小习惯
+3 small habits that doubled my social media productivity
+
+1. 每个账号一个独立环境，登录态持久，再也不用天天扫码
+2. 窗口名写成账号备注，打开就知道是谁，不怕登错
+3. 重复动作交给自动化：养号、发帖、回评让 AI 跑
+
+三个习惯 MatrixFlow 都支持。All three are supported by MatrixFlow.
+https://browser.lingjingxia.com
+#社媒运营 #效率 #指纹浏览器 #AntidetectBrowser #Productivity",C:\Users\admin\AppData\Roaming\@matrixflow\desktop\fb-images\product\mf-main-dashboard.png,待发布

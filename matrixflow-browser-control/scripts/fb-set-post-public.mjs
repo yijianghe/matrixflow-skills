@@ -7,6 +7,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { jsClickAt } from "./fb-input.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
@@ -77,11 +78,8 @@ async function ev(cdp, expression) {
 }
 
 async function clickAt(cdp, x, y) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x - 2, y: y - 2 });
-  await sleep(rand(80, 160));
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await sleep(rand(80, 160));
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  // 2026-08-13：Cloak 内核屏蔽 CDP 合成 pressed/released，改用 JS 合成事件
+  await jsClickAt(cdp, ev, x, y);
 }
 
 async function main() {
@@ -160,7 +158,7 @@ async function main() {
     await clickAt(cdp, b.x + rand(-1, 1), b.y + rand(-1, 1));
     await sleep(1500);
     // 若弹窗未开，重试一次
-    let popupOpen = (await ev(cdp, `[...document.querySelectorAll('[role=dialog]')].some(d => (d.innerText || '').includes('谁能看到你的帖子'))`)) === true;
+    let popupOpen = (await ev(cdp, `[...document.querySelectorAll('[role=dialog]')].some(d => ['谁能看到你的帖子', 'Who should see', '게시물 공개 대상', 'Chi può vedere'].some((k) => (d.innerText || '').includes(k)))`)) === true;
     if (!popupOpen) {
       const btn2 = await ev(
         cdp,
@@ -186,16 +184,21 @@ async function main() {
     const radio = await ev(
       cdp,
       `(() => {
-        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => (d.innerText || '').includes('谁能看到你的帖子'));
+        const dlg = [...document.querySelectorAll('[role=dialog]')].find(d => ['谁能看到你的帖子', 'Who should see', '게시물 공개 대상', 'Chi può vedere'].some((k) => (d.innerText || '').includes(k)));
         if (!dlg) return null;
         const rows = [...dlg.querySelectorAll('div')]
-          .filter(e => (e.innerText || '').trim().startsWith('公开') && e.getBoundingClientRect().width > 200)
+          .filter(e => /^(公开|Public|전체 공개|Pubblico|Tutti)/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width > 200)
           .sort((a, b) => {
             const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
             return (ra.width * ra.height) - (rb.width * rb.height);
           });
         const row = rows[0] || dlg;
-        const r = row.querySelector('input[type=radio]') || dlg.querySelector('input[type=radio]');
+        // 2026-08-13：input radio 可能被藏在屏幕外，优先点可见圆点
+        const dot = [...row.querySelectorAll('div, span')].find((d) => {
+          const dr = d.getBoundingClientRect();
+          return dr.width >= 20 && dr.width <= 40 && dr.height >= 20 && dr.height <= 40 && dr.x >= 0 && dr.x < innerWidth && dr.bottom > 0 && dr.top < innerHeight;
+        });
+        const r = dot || row.querySelector('input[type=radio]') || dlg.querySelector('input[type=radio]');
         if (!r) return null;
         const rr = r.getBoundingClientRect();
         return JSON.stringify({ x: rr.x + rr.width / 2, y: rr.y + rr.height / 2, label: (row.innerText || '').trim().slice(0, 12) });
@@ -211,7 +214,7 @@ async function main() {
         const el = [...document.querySelectorAll('div[role=button]')].find(e => {
           const a = (e.getAttribute('aria-label') || '');
           const rr = e.getBoundingClientRect();
-          return a === '保存隐私分享对象选择并关闭对话框' && rr.bottom > 0 && rr.top < innerHeight && rr.width > 30;
+          return (/保存隐私分享对象|Save privacy|공개 대상 선택 완료|Salva|완료/.test(a) || /^(保存|Done|완료|Fine|Fatto)/.test((e.textContent || '').trim())) && rr.bottom > 0 && rr.top < innerHeight && rr.width > 30;
         });
         if (!el) return null;
         const rr = el.getBoundingClientRect();
@@ -231,7 +234,7 @@ async function main() {
         return a ? (a.innerText || '').replace(/\\s+/g, ' ').slice(0, 45) : '';
       })()`
     );
-    const ok = /公开|Public/.test(label || "");
+    const ok = /公开|Public|전체 공개|Pubblico|Tutti/.test(label || "");
     console.log(`[set-public] ${label || "未找到"} ${ok ? "✅ 已公开" : "❌ 仍未公开"}`);
     if (!ok) process.exitCode = 1;
   } finally {

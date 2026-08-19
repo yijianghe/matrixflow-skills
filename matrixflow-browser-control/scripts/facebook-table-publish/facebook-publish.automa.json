@@ -1,0 +1,147 @@
+{
+  "extVersion": "1.30.02",
+  "name": "Facebook 表格发帖",
+  "icon": "riGlobalLine",
+  "table": [],
+  "version": "1.30.02",
+  "drawflow": {
+    "nodes": [
+      {
+        "id": "trig01",
+        "type": "BlockBasic",
+        "initialized": false,
+        "position": { "x": 40, "y": 60 },
+        "data": {
+          "disableBlock": false,
+          "description": "手动运行：从表格读取文案图片，发一篇 Facebook 帖子",
+          "type": "manual",
+          "interval": 60,
+          "delay": 5,
+          "date": "",
+          "time": "00:00",
+          "url": "",
+          "shortcut": "",
+          "activeInInput": false,
+          "isUrlRegex": false,
+          "days": [],
+          "contextMenuName": "",
+          "contextTypes": [],
+          "parameters": [],
+          "preferParamsInTab": false,
+          "observeElement": {
+            "selector": "",
+            "baseSelector": "",
+            "matchPattern": "",
+            "targetOptions": { "subtree": false, "childList": true, "attributes": false, "attributeFilter": [], "characterData": false },
+            "baseElOptions": { "subtree": false, "childList": true, "attributes": false, "attributeFilter": [], "characterData": false }
+          }
+        },
+        "label": "trigger"
+      },
+      {
+        "id": "tab01",
+        "type": "BlockBasic",
+        "initialized": false,
+        "position": { "x": 360, "y": 60 },
+        "data": {
+          "active": true,
+          "customUserAgent": false,
+          "description": "强制中文界面",
+          "disableBlock": false,
+          "inGroup": false,
+          "tabZoom": 1,
+          "updatePrevTab": true,
+          "url": "https://www.facebook.com/?locale=zh_CN",
+          "userAgent": "",
+          "waitTabLoaded": true
+        },
+        "label": "new-tab"
+      },
+      {
+        "id": "delay01",
+        "type": "BlockBasic",
+        "initialized": false,
+        "position": { "x": 680, "y": 60 },
+        "data": { "disableBlock": false, "time": 5000 },
+        "label": "delay"
+      },
+      {
+        "id": "jsmain",
+        "type": "BlockBasic",
+        "initialized": false,
+        "position": { "x": 1000, "y": 60 },
+        "data": {
+          "code": "(async () => {\n  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));\n  const jsClick = (x, y) => {\n    const el = document.elementFromPoint(x, y);\n    if (!el) return false;\n    const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };\n    for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) el.dispatchEvent(new MouseEvent(type, opts));\n    return true;\n  };\n  const post = JSON.parse(localStorage.getItem('mf_post') || '{}');\n  if (!post.text) { localStorage.setItem('mf_done', 'error:no-data'); automaNextBlock({ success: false }); return; }\n  localStorage.setItem('mf_composer_ready', '0');\n  localStorage.setItem('mf_content_ready', '0');\n  localStorage.setItem('mf_done', '');\n\n  // 1) 打开发布框（多语言入口）\n  let opened = false;\n  for (let i = 0; i < 30 && !opened; i++) {\n    const btn = [...document.querySelectorAll('[role=button]')].find((e) => {\n      const t = (e.textContent || '').trim();\n      const r = e.getBoundingClientRect();\n      return (t.includes('分享你的新鲜事') || t.includes('分享想法') || t.includes(\"What's on your mind\") || t.includes('무슨 생각을') || t.includes('게시물 만들기') || t.includes('A cosa stai pensando') || t.includes('Crea post')) && r.width > 100 && r.width < 900 && r.bottom > 0 && r.top < innerHeight;\n    });\n    if (btn) { const r = btn.getBoundingClientRect(); jsClick(r.x + r.width / 2, r.y + r.height / 2); }\n    await sleep(700);\n    opened = !!document.querySelector('div[contenteditable=true]');\n  }\n  if (!opened) { localStorage.setItem('mf_done', 'error:composer'); automaNextBlock({ success: false }); return; }\n  localStorage.setItem('mf_composer_ready', '1');\n\n  // 2) 等编排脚本注入图片+文本（最长 120 秒）\n  for (let i = 0; i < 120; i++) {\n    if (localStorage.getItem('mf_content_ready') === '1') break;\n    await sleep(1000);\n  }\n  if (localStorage.getItem('mf_content_ready') !== '1') { localStorage.setItem('mf_done', 'error:content-timeout'); automaNextBlock({ success: false }); return; }\n\n  // 3) 设公开（多语言：中/英/韩/意）\n  for (let attempt = 0; attempt < 3; attempt++) {\n    const priv = [...document.querySelectorAll('[role=dialog] div[role=button]')].find((e) => {\n      const a = (e.getAttribute('aria-label') || '');\n      const r = e.getBoundingClientRect();\n      return /^(编辑隐私设置|Edit privacy|공개 범위|Modifica la privacy)/.test(a) && r.bottom > 0 && r.top < innerHeight && r.width > 20;\n    });\n    if (priv) { const r = priv.getBoundingClientRect(); jsClick(r.x + r.width / 2, r.y + r.height / 2); await sleep(1200); }\n    const pubRow = [...document.querySelectorAll('[role=dialog] div')].find((e) => {\n      const t = (e.textContent || '').trim();\n      const r = e.getBoundingClientRect();\n      return /^(公开|Public|전체 공개|Pubblico|Tutti)/.test(t) && r.width > 300 && r.height > 40 && r.height < 200;\n    });\n    if (pubRow) {\n      const dot = [...pubRow.querySelectorAll('div, span')].find((d) => { const dr = d.getBoundingClientRect(); return dr.width >= 20 && dr.width <= 40 && dr.height >= 20 && dr.height <= 40 && dr.x >= 0 && dr.x < innerWidth; });\n      const target = dot || pubRow;\n      const r = target.getBoundingClientRect();\n      jsClick(r.x + r.width / 2, r.y + r.height / 2);\n      await sleep(800);\n    }\n    const doneBtn = [...document.querySelectorAll('[role=dialog] div[role=button]')].find((e) => {\n      const a = (e.getAttribute('aria-label') || '');\n      const t = (e.textContent || '').trim();\n      const r = e.getBoundingClientRect();\n      return (/^(完成|Done|완료|Fine|Fatto)/.test(a) || /완료/.test(a) || /^(完成|Done|완료|Fine|Fatto)/.test(t)) && r.bottom > 0 && r.top < innerHeight && r.width > 30;\n    });\n    if (doneBtn) { const r = doneBtn.getBoundingClientRect(); jsClick(r.x + r.width / 2, r.y + r.height / 2); await sleep(1200); }\n    const label = [...document.querySelectorAll('div[role=button]')].find((e) => /^(编辑隐私设置|Edit privacy|공개 범위|Modifica la privacy)/.test(e.getAttribute('aria-label') || ''));\n    if (label && /分享对象：公开|Shared with: Public|전체 공개|Pubblico|Tutti/.test(label.getAttribute('aria-label') || '')) break;\n  }\n\n  // 4) 点发帖（多语言，过滤禁用副本）\n  let posted = false;\n  for (let attempt = 0; attempt < 3 && !posted; attempt++) {\n    const btn = [...document.querySelectorAll('[role=dialog] div[role=button]')].filter((e) => {\n      const t = (e.textContent || '').trim();\n      const a = (e.getAttribute('aria-label') || '');\n      const r = e.getBoundingClientRect();\n      return (/^(发帖|Post|게시|Pubblica|Publicar|发布)$/.test(t) || /^(发帖|Post|게시|Pubblica|Publicar|发布)$/.test(a)) && r.bottom > 0 && r.top < innerHeight && r.width > 30 && e.getAttribute('aria-disabled') !== 'true';\n    }).sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];\n    if (btn) { const r = btn.getBoundingClientRect(); jsClick(r.x + r.width / 2, r.y + r.height / 2); }\n    await sleep(3500);\n    const closed = ![...document.querySelectorAll('[role=dialog]')].some((d) => d.getBoundingClientRect().width > 300 && d.querySelector('div[contenteditable=true]'));\n    if (closed) posted = true;\n  }\n\n  localStorage.setItem('mf_done', posted ? 'published' : 'error:post');\n  automaNextBlock({ success: posted });\n})()",
+          "context": "website",
+          "description": "发帖主逻辑：读数据→打开发布框→等注入→设公开→发帖",
+          "disableBlock": false,
+          "everyNewTab": false,
+          "preloadScripts": [],
+          "runBeforeLoad": false,
+          "timeout": 180000
+        },
+        "label": "javascript-code"
+      }
+    ],
+    "edges": [
+      {
+        "id": "vueflow__edge-trig01trig01-output-1-tab01tab01-input-1",
+        "type": "custom",
+        "source": "trig01",
+        "target": "tab01",
+        "sourceHandle": "trig01-output-1",
+        "targetHandle": "tab01-input-1",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "label": "",
+        "markerEnd": "arrowclosed",
+        "sourceX": 160,
+        "sourceY": 96,
+        "targetX": 340,
+        "targetY": 96
+      },
+      {
+        "id": "vueflow__edge-tab01tab01-output-1-delay01delay01-input-1",
+        "type": "custom",
+        "source": "tab01",
+        "target": "delay01",
+        "sourceHandle": "tab01-output-1",
+        "targetHandle": "delay01-input-1",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "label": "",
+        "markerEnd": "arrowclosed",
+        "sourceX": 480,
+        "sourceY": 96,
+        "targetX": 660,
+        "targetY": 96
+      },
+      {
+        "id": "vueflow__edge-delay01delay01-output-1-jsmainjsmain-input-1",
+        "type": "custom",
+        "source": "delay01",
+        "target": "jsmain",
+        "sourceHandle": "delay01-output-1",
+        "targetHandle": "jsmain-input-1",
+        "updatable": true,
+        "selectable": true,
+        "data": {},
+        "label": "",
+        "markerEnd": "arrowclosed",
+        "sourceX": 800,
+        "sourceY": 96,
+        "targetX": 980,
+        "targetY": 96
+      }
+    ],
+    "position": [0, 0],
+    "zoom": 1,
+    "viewport": { "x": 0, "y": 0, "zoom": 1 }
+  },
+  "settings": {},
+  "globalData": {},
+  "description": "从表格读取文案和图片，改中文界面后发布 Facebook 帖子，发完标记 mf_done 由编排脚本关窗",
+  "includedWorkflows": []
+}
